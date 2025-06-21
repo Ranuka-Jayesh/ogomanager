@@ -1,7 +1,7 @@
 # 🚀 OGO Project & Employee Management System
 
 A modern, full-stack web application designed to streamline project and employee management. Built with **React**, **TypeScript**, and **Supabase**, OGO offers a visually striking **Glassmorphism UI**, real-time data sync, and advanced analytics.
-
+![Dashboard Animation](https://github.com/Ranuka-Jayesh/ogomanager/blob/083f9dda143187ff1cd2929759f91717cda8a37a/Recording%202025-06-22%20045137.gif)
 ## ✨ Key Features
 
 ### 📊 Dashboard
