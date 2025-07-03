@@ -88,243 +88,60 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
     const pageWidth = pdf.internal.pageSize.getWidth();
     const pageHeight = pdf.internal.pageSize.getHeight();
     const margin = 20;
-    const contentWidth = pageWidth - (margin * 2);
     let yPosition = margin;
     
     // Add OGO logo (top left)
     const logoImg = new Image();
     logoImg.src = '/Logo.jpg';
     await new Promise(resolve => { logoImg.onload = resolve; });
-    pdf.addImage(logoImg, 'JPEG', margin, yPosition, 18, 18);
+    pdf.addImage(logoImg, 'JPEG', margin, yPosition, 20, 20); // 20x20mm original size
     
-    // Header with company details (aligned left, rest centered)
-    const headerLeft = margin + 22;
-    let headerY = yPosition + 2;
+    // Company info (top right, stacked, right-aligned)
     pdf.setFont('helvetica', 'bold');
-    pdf.setFontSize(20);
-    pdf.setTextColor(225, 100, 40); // #E16428
-    pdf.text('ogo assignments', headerLeft, headerY + 6);
     pdf.setFontSize(11);
-    pdf.setTextColor(100, 100, 100);
-    pdf.text('department of academic', headerLeft, headerY + 14);
-    pdf.text('Galle, Sri Lanka.', headerLeft, headerY + 20);
-    pdf.text('+94 75 930 7059', headerLeft, headerY + 26);
+    pdf.setTextColor(30, 30, 30);
+    const infoX = pageWidth - margin;
+    let infoY = yPosition + 2;
+    pdf.text('OGO TECHNOLOGY', infoX, infoY, { align: 'right' });
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(10);
+    infoY += 5;
+    pdf.text('Department of Academic Services', infoX, infoY, { align: 'right' });
+    infoY += 5;
+    pdf.text('Galle, Sri Lanka', infoX, infoY, { align: 'right' });
+    infoY += 5;
+    pdf.text('+94 75 930 7059 | info@ogotechnology.com', infoX, infoY, { align: 'right' });
     
-    // Centered report info
+    // Report title centered below header
+    yPosition += 22;
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(18);
+    pdf.setTextColor(30, 30, 30);
     let reportTitle = '';
     if (month !== 'all' && year !== 'all') {
-      reportTitle = `Sales Report - ${monthName} ${yearName}`;
+      reportTitle = `Monthly Performance Report - ${monthName} ${yearName}`;
     } else if (month === 'all' && year !== 'all') {
-      reportTitle = `Annual Sales Report - ${yearName}`;
+      reportTitle = `Annual Performance Report - ${yearName}`;
     } else if (month === 'all' && year === 'all') {
-      reportTitle = 'Annual Sales Report - All Years';
+      reportTitle = 'Comprehensive Performance Report - All Time';
     } else {
-      reportTitle = 'Sales Report';
+      reportTitle = 'Performance Report';
     }
-    pdf.setFontSize(18);
-    pdf.setTextColor(40, 40, 40);
-    pdf.setFont('helvetica', 'bold');
-    pdf.text(reportTitle, pageWidth / 2 + 10, yPosition + 24, { align: 'center' });
-    yPosition += 34;
-    
-    // Report period
-    pdf.setFontSize(14);
-    pdf.setTextColor(50, 50, 50);
-    pdf.text(`Report Period: ${monthName} ${yearName}`, pageWidth / 2, yPosition, { align: 'center' });
-    yPosition += 8;
-    
-    pdf.setFontSize(10);
+    pdf.text(reportTitle, pageWidth / 2, yPosition + 10, { align: 'center' });
+    yPosition += 12;
+    // Add single line: Report Period ... ~ Generated ...
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(11);
     pdf.setTextColor(80, 80, 80);
-    pdf.text(`Generated: ${now.toLocaleDateString()} at ${now.toLocaleTimeString()}`, pageWidth / 2, yPosition, { align: 'center' });
-    yPosition += 20;
+    const generatedDate = now.toLocaleDateString('en-GB');
+    const generatedTime = now.toLocaleTimeString('en-GB', { hour12: false });
+    pdf.text(`Report Period: ${monthName} ${yearName} ~ Generated: ${generatedDate} at ${generatedTime}`, pageWidth / 2, yPosition + 10, { align: 'center' });
+    yPosition += 14;
     
-    // Summary section
-    pdf.setFontSize(16);
-    pdf.setTextColor(225, 100, 40);
-    pdf.text('EXECUTIVE SUMMARY', margin, yPosition);
-    yPosition += 8;
-    
-    // Summary cards (lighter background, dark value text)
-    const cardHeight = 25;
-    const cardWidth = (contentWidth - 10) / 2;
-    
-    // Revenue card
-    pdf.setFillColor(247, 247, 247);
-    pdf.rect(margin, yPosition, cardWidth, cardHeight, 'F');
-    pdf.setFontSize(12);
-    pdf.setTextColor(225, 100, 40);
-    pdf.text('Total Revenue', margin + 5, yPosition + 8);
-    pdf.setFontSize(16);
-    pdf.setTextColor(34, 34, 34);
-    pdf.text(`LKR ${totalRevenue.toLocaleString()}`, margin + 5, yPosition + 18);
-    
-    // Profit card
-    pdf.setFillColor(247, 247, 247);
-    pdf.rect(margin + cardWidth + 10, yPosition, cardWidth, cardHeight, 'F');
-    pdf.setFontSize(12);
-    pdf.setTextColor(34, 197, 94);
-    pdf.text('Total Profit', margin + cardWidth + 15, yPosition + 8);
-    pdf.setFontSize(16);
-    pdf.setTextColor(34, 34, 34);
-    pdf.text(`LKR ${profit.toLocaleString()}`, margin + cardWidth + 15, yPosition + 18);
-    
-    yPosition += cardHeight + 10;
-    
-    // Profit margin
-    pdf.setFillColor(247, 247, 247);
-    pdf.rect(margin, yPosition, cardWidth, cardHeight, 'F');
-    pdf.setFontSize(12);
-    pdf.setTextColor(147, 51, 234);
-    pdf.text('Profit Margin', margin + 5, yPosition + 8);
-    pdf.setFontSize(16);
-    pdf.setTextColor(34, 34, 34);
-    pdf.text(`${profitMargin.toFixed(1)}%`, margin + 5, yPosition + 18);
-    
-    // Employee payments
-    pdf.setFillColor(247, 247, 247);
-    pdf.rect(margin + cardWidth + 10, yPosition, cardWidth, cardHeight, 'F');
-    pdf.setFontSize(12);
-    pdf.setTextColor(234, 179, 8);
-    pdf.text('Employee Payments', margin + cardWidth + 15, yPosition + 8);
-    pdf.setFontSize(16);
-    pdf.setTextColor(34, 34, 34);
-    pdf.text(`LKR ${totalEmployeePayments.toLocaleString()}`, margin + cardWidth + 15, yPosition + 18);
-    
-    yPosition += cardHeight + 20;
-    
-    // Best Performance section
-    pdf.setFontSize(16);
-    pdf.setTextColor(225, 100, 40);
-    pdf.text('BEST PERFORMANCE', margin, yPosition);
-    yPosition += 8;
-    
-    // Best employee and org
-    const perfCardHeight = 20;
-    const perfCardWidth = (contentWidth - 10) / 2;
-    
-    // Best Employee
-    pdf.setFillColor(240, 240, 240);
-    pdf.rect(margin, yPosition, perfCardWidth, perfCardHeight, 'F');
-    pdf.setFontSize(11);
-    pdf.setTextColor(225, 100, 40);
-    pdf.text('Best Employee', margin + 5, yPosition + 7);
-    pdf.setFontSize(12);
-    pdf.setTextColor(50, 50, 50);
-    pdf.text(bestEmployee ? `${bestEmployee.firstName} ${bestEmployee.lastName}` : '-', margin + 5, yPosition + 15);
-    
-    // Best University/Org
-    pdf.setFillColor(240, 240, 240);
-    pdf.rect(margin + perfCardWidth + 10, yPosition, perfCardWidth, perfCardHeight, 'F');
-    pdf.setFontSize(11);
-    pdf.setTextColor(225, 100, 40);
-    pdf.text('Best University/Org', margin + perfCardWidth + 15, yPosition + 7);
-    pdf.setFontSize(12);
-    pdf.setTextColor(50, 50, 50);
-    pdf.text(bestOrg ? bestOrg[0] : '-', margin + perfCardWidth + 15, yPosition + 15);
-    
-    yPosition += perfCardHeight + 20;
-    
-    // Employee Performance Table
-    if (employeeStats.length > 0) {
-      pdf.setFontSize(16);
-      pdf.setTextColor(225, 100, 40);
-      pdf.text('EMPLOYEE PERFORMANCE', margin, yPosition);
-      yPosition += 8;
-      
-      // Check if we need a new page
-      if (yPosition > pageHeight - 80) {
-        pdf.addPage();
-        yPosition = margin;
-      }
-      
-      // Table headers
-      const tableY = yPosition;
-      
-      pdf.setFillColor(225, 100, 40);
-      pdf.rect(margin, tableY, contentWidth, 8, 'F');
-      pdf.setFontSize(10);
-      pdf.setTextColor(255, 255, 255);
-      pdf.text('Employee', margin + 2, tableY + 6);
-      pdf.text('Projects', margin + 62, tableY + 6);
-      pdf.text('Earnings/Revenue', margin + 87, tableY + 6);
-      pdf.text('Completion %', margin + 127, tableY + 6);
-      
-      yPosition += 8;
-      
-      // Table rows
-      employeeStats.forEach((emp, index) => {
-        if (yPosition > pageHeight - 40) {
-          pdf.addPage();
-          yPosition = margin;
-        }
-        
-        const rowY = yPosition;
-        pdf.setFillColor(index % 2 === 0 ? 248 : 255);
-        pdf.rect(margin, rowY, contentWidth, 8, 'F');
-        
-        pdf.setFontSize(9);
-        pdf.setTextColor(50, 50, 50);
-        pdf.text(`${emp.firstName} ${emp.lastName}`, margin + 2, rowY + 6);
-        pdf.text(String(emp.projectCount), margin + 62, rowY + 6);
-        pdf.setTextColor(225, 100, 40);
-        pdf.text('LKR ' + String(emp.displayValue.toLocaleString()), margin + 87, rowY + 6);
-        pdf.setTextColor(50, 50, 50);
-        const completionRate = emp.projectCount > 0 ? ((emp.projectCount && emp.projectCount > 0) ? ((projects.filter(p => p.assignedTo === emp.id && p.status === 'Delivered').length / emp.projectCount) * 100) : 0) : 0;
-        pdf.text(completionRate.toFixed(1) + '%', margin + 127, rowY + 6);
-        
-        yPosition += 8;
-      });
-      
-      yPosition += 15;
-    }
-    
-    // Project Types Performance Table
-    if (Object.keys(typeStats).length > 0) {
-      // Check if we need a new page
-      if (yPosition > pageHeight - 60) {
-        pdf.addPage();
-        yPosition = margin;
-      }
-      
-      pdf.setFontSize(16);
-      pdf.setTextColor(225, 100, 40);
-      pdf.text('PROJECT TYPES PERFORMANCE', margin, yPosition);
-      yPosition += 8;
-      
-      // Table headers
-      const typeTableY = yPosition;
-      
-      pdf.setFillColor(225, 100, 40);
-      pdf.rect(margin, typeTableY, contentWidth, 8, 'F');
-      pdf.setFontSize(10);
-      pdf.setTextColor(255, 255, 255);
-      pdf.text('Project Type', margin + 2, typeTableY + 6);
-      pdf.text('Projects', margin + 82, typeTableY + 6);
-      pdf.text('Revenue', margin + 112, typeTableY + 6);
-      
-      yPosition += 8;
-      
-      // Table rows
-      Object.entries(typeStats).forEach(([typeId, stat], index) => {
-        if (yPosition > pageHeight - 40) {
-          pdf.addPage();
-          yPosition = margin;
-        }
-        
-        const rowY = yPosition;
-        pdf.setFillColor(index % 2 === 0 ? 248 : 255);
-        pdf.rect(margin, rowY, contentWidth, 8, 'F');
-        
-        pdf.setFontSize(9);
-        pdf.setTextColor(50, 50, 50);
-        pdf.text(getTypeName(typeId), margin + 2, rowY + 6);
-        pdf.text(String(stat.count), margin + 82, rowY + 6);
-        pdf.setTextColor(225, 100, 40);
-        pdf.text('LKR ' + String(stat.revenue.toLocaleString()), margin + 112, rowY + 6);
-        
-        yPosition += 8;
-      });
-    }
+    // After the report period/generated line, skip all summary, performers, employee, and project type sections.
+    // Do not render EXECUTIVE SUMMARY, TOP PERFORMERS, Top Employee, Top Client, EMPLOYEE PERFORMANCE ANALYSIS, EMPLOYEE PERFORMANCE, PROJECT TYPES PERFORMANCE.
+    // Only the header and the single line for report period/generated will be included in the PDF.
+    // (All related code for those sections has been removed.)
     
     // Add page numbers
     const pageCount = (typeof pdf.getNumberOfPages === 'function') ? pdf.getNumberOfPages() : (pdf.internal.pages ? pdf.internal.pages.length : 1);
@@ -332,15 +149,26 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
       pdf.setPage(Number(i));
       pdf.setFontSize(10);
       pdf.setTextColor(100, 100, 100);
-      pdf.text(`Page ${i} of ${pageCount}`, pageWidth / 2, pageHeight - 10, { align: 'center' });
+      pdf.text(`Page ${i} of ${pageCount}`, pageWidth / 2, pageHeight - 15, { align: 'center' });
     }
     
     // Footer
     pdf.setFontSize(8);
     pdf.setTextColor(150, 150, 150);
-    pdf.text('OGO Technology - Professional Project Management System', pageWidth / 2, pageHeight - 5, { align: 'center' });
+    pdf.text('OGO Technology - Professional Project Management System', pageWidth / 2, pageHeight - 8, { align: 'center' });
+    pdf.text('Confidential Business Report - For Internal Use Only', pageWidth / 2, pageHeight - 5, { align: 'center' });
     
-    pdf.save(`OGO-Report-${monthName}-${yearName}.pdf`);
+    // Generate filename
+    let filename = 'OGO-Report';
+    if (month !== 'all' && year !== 'all') {
+      filename = `OGO-Monthly-Report-${monthName}-${yearName}`;
+    } else if (month === 'all' && year !== 'all') {
+      filename = `OGO-Annual-Report-${yearName}`;
+    } else {
+      filename = `OGO-Comprehensive-Report-${now.getFullYear()}`;
+    }
+    
+    pdf.save(`${filename}.pdf`);
   };
 
   useEffect(() => {

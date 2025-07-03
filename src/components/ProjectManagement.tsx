@@ -6,7 +6,6 @@ import { ProjectTable } from './ProjectTable';
 import { useProjects } from '../hooks/useProjects';
 import { ProjectReceiptModal } from './ProjectReceiptModal';
 import { supabase } from '../supabaseClient';
-import { useEffect as useReactEffect } from 'react';
 
 interface ProjectManagementProps {
   employees: Employee[];
@@ -72,13 +71,14 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
     };
   }, []);
 
-  useReactEffect(() => {
+  // Fetch project types on mount
+  useEffect(() => {
     async function fetchTypes() {
       const { data } = await supabase.from('project_types').select('*');
       if (data) setProjectTypes(data);
     }
-    if (receiptProject) fetchTypes();
-  }, [receiptProject]);
+    fetchTypes();
+  }, []);
 
   let filteredProjects = projects.filter(project => 
     filter === 'all' || project.status === filter
@@ -292,93 +292,165 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
           <div className="block sm:hidden space-y-3">
             {filteredProjects.map((project) => {
               const employee = employees.find(emp => emp.id === project.assignedTo);
+              const statusColors = {
+                'Running': 'bg-blue-500/20 text-blue-300 border-blue-500/30',
+                'Delivered': 'bg-green-500/20 text-green-300 border-green-500/30',
+                'Pending': 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30',
+                'Correction': 'bg-orange-500/20 text-orange-300 border-orange-500/30',
+                'Rejected': 'bg-red-500/20 text-red-300 border-red-500/30'
+              };
+              
               return (
-                <div key={project.id} className="bg-[#232021]/80 rounded-xl border border-[#E16428]/10 p-3 flex flex-col gap-1 shadow-sm relative">
-                  <div className="flex items-center gap-2">
-                    <span className="font-bold text-[#F6E9E9] text-sm truncate max-w-[100px]">{project.clientName}</span>
-                    <span className={`ml-auto px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                      project.status === 'Running'
-                        ? 'bg-blue-500/20 text-blue-300'
-                        : project.status === 'Delivered'
-                        ? 'bg-green-500/20 text-green-300'
-                        : project.status === 'Pending'
-                        ? 'bg-yellow-500/20 text-yellow-300'
-                        : 'bg-red-500/20 text-red-300'
-                    }`}>{project.status}</span>
+                <div key={project.id} className="bg-gradient-to-br from-[#232021]/90 to-[#272121]/80 rounded-2xl border border-[#E16428]/20 p-4 shadow-lg hover:shadow-xl transition-all duration-300 relative overflow-hidden group">
+                  {/* Status indicator line */}
+                  <div className={`absolute top-0 left-0 right-0 h-1 ${statusColors[project.status as keyof typeof statusColors] || 'bg-gray-500/20'}`}></div>
+                  
+                  {/* Header with client info and actions */}
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <div className="w-2 h-2 bg-[#E16428] rounded-full"></div>
+                        <h3 className="text-[#F6E9E9] font-bold text-sm truncate">{project.clientName}</h3>
                   </div>
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {project.projectDescription.split(',').map((type, idx) => (
-                      <span key={idx} className="bg-[#E16428]/20 text-[#E16428] rounded-full px-2 py-0.5 text-[10px] font-medium lowercase max-w-[60px] truncate">{type}</span>
-                    ))}
+                      <p className="text-[#F6E9E9]/60 text-xs truncate">{project.clientUniOrg}</p>
                   </div>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="text-[#F6E9E9]/60 text-xs truncate max-w-[80px]">{project.clientUniOrg}</span>
-                    <span className="flex items-center gap-1 text-[#F6E9E9]/40 text-[11px] ml-auto">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                      {new Date(project.deadlineDate).toLocaleDateString()}
-                  </span>
+                    
+                    {/* Action buttons */}
+                    <div className="flex items-center gap-1.5 ml-2">
+                      <button
+                        onClick={() => handleEdit(project)}
+                        className="p-2 bg-[#E16428]/20 text-[#E16428] rounded-xl hover:bg-[#E16428]/30 transition-all duration-200 hover:scale-110"
+                        title="Edit Project"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={() => setReceiptProject(project)}
+                        className="p-2 bg-blue-500/20 text-blue-400 rounded-xl hover:bg-blue-500/30 transition-all duration-200 hover:scale-110"
+                        title="View Receipt"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={() => setConfirmDeleteId(project.id)}
+                        className="p-2 bg-red-500/20 text-red-400 rounded-xl hover:bg-red-500/30 transition-all duration-200 hover:scale-110"
+                        title="Delete Project"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
                 </div>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="text-[#F6E9E9]/70 text-xs truncate max-w-[80px]">{employee ? `${employee.firstName} ${employee.lastName}` : 'Unassigned'}</span>
-                    <span className="text-[#E16428] font-bold text-xs ml-auto">LKR {project.price.toLocaleString()}</span>
                   </div>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className={`text-xs font-bold ${project.paymentOfEmp < 0 ? 'text-yellow-400' : 'text-green-400'}`}>Pay: {project.paymentOfEmp}</span>
-                    {project.paymentOfEmp < 0 && (
-                      <span title="Negative employee payment" className="ml-1">
-                        <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-yellow-400 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9 9 4.03 9 9z" /></svg>
+
+                  {/* Project types with icons */}
+                  <div className="flex flex-wrap gap-1.5 mb-3">
+                    {project.projectDescription.split(',').map((typeId, idx) => {
+                      const type = projectTypes.find(t => t.id === typeId.trim());
+                      return (
+                        <span key={idx} className="inline-flex items-center gap-1 bg-[#E16428]/15 text-[#E16428] rounded-full px-2.5 py-1 text-xs font-medium border border-[#E16428]/20">
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                          </svg>
+                          {type ? `${type.name} (${project.projectId})` : `${typeId.trim()} (${project.projectId})`}
+                        </span>
+                      );
+                    })}
+                    {project.fastDeliver && (
+                      <span className="inline-flex items-center gap-1 bg-yellow-500/20 text-yellow-400 rounded-full px-2.5 py-1 text-xs font-medium border border-yellow-500/30">
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                        Fast
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-1 sm:gap-2 mt-2">
-                    <button
-                      onClick={() => handleEdit(project)}
-                      className="p-1.5 sm:p-2 bg-[#E16428]/20 text-[#E16428] rounded-lg hover:bg-[#E16428]/30 transition-all duration-300"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3 sm:w-4 sm:h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536M9 11l6 6M3 21h6v-6H3v6z" /></svg>
-                    </button>
-                    <button
-                      onClick={() => setConfirmDeleteId(project.id)}
-                      className="p-1.5 sm:p-2 bg-red-500/20 text-red-400 rounded-lg hover:bg-red-500/30 transition-all duration-300"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3 sm:w-4 sm:h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                    </button>
-                    <button
-                      onClick={() => setReceiptProject(project)}
-                      className="p-1.5 sm:p-2 bg-blue-500/20 text-blue-400 rounded-lg hover:bg-blue-500/30 transition-all duration-300"
-                      title="Download or share receipt"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3 sm:w-4 sm:h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-                    </button>
-                  </div>
-                  {/* Delete confirmation modal */}
-                  {confirmDeleteId === project.id && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm animate-fadeIn">
-                      <div className="bg-[#272121] border border-[#E16428]/30 rounded-2xl shadow-2xl p-8 max-w-xs w-full flex flex-col items-center scale-100 animate-popIn">
-                        <div className="mb-4">
-                          <svg width="48" height="48" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="12" fill="#E16428" opacity="0.15"/><path d="M15.535 8.465l-7.07 7.07M8.465 8.465l7.07 7.07" stroke="#E16428" strokeWidth="2" strokeLinecap="round"/></svg>
-                        </div>
-                        <h3 className="text-lg font-bold text-[#F6E9E9] mb-2 font-['Poppins']">Delete Project?</h3>
-                        <p className="text-[#F6E9E9]/70 text-center mb-6 font-['Inter']">
-                          Are you sure you want to delete <span className="text-[#E16428] font-bold">{project.clientName}</span>? This action cannot be undone.
+
+                  {/* Project details grid */}
+                  <div className="grid grid-cols-2 gap-3 mb-3">
+                    {/* Assigned To */}
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 bg-[#E16428]/20 rounded-full flex items-center justify-center">
+                        <svg className="w-4 h-4 text-[#E16428]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                        </svg>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[#F6E9E9]/60 text-xs">Assigned</p>
+                        <p className="text-[#F6E9E9] text-sm font-medium truncate">
+                          {employee ? `${employee.firstName} ${employee.lastName}` : 'Unassigned'}
                         </p>
-                        <div className="flex gap-4 mt-2">
-                          <button
-                            onClick={() => handleDelete(project.id)}
-                            className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 transition font-bold"
-                          >
-                            Delete
-                          </button>
-                          <button
-                            onClick={() => setConfirmDeleteId(null)}
-                            className="px-4 py-2 bg-[#272121] text-[#F6E9E9] border border-[#E16428]/30 rounded hover:bg-[#363333] transition"
-                          >
-                            Cancel
-                          </button>
-                        </div>
+                      </div>
+                    </div>
+
+                    {/* Deadline */}
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 bg-blue-500/20 rounded-full flex items-center justify-center">
+                        <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[#F6E9E9]/60 text-xs">Deadline</p>
+                        <p className="text-[#F6E9E9] text-sm font-medium">
+                          {new Date(project.deadlineDate).toLocaleDateString()}
+                        </p>
                       </div>
                   </div>
-                  )}
+
+                    {/* Price */}
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 bg-green-500/20 rounded-full flex items-center justify-center">
+                        <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
+                        </svg>
+                        </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[#F6E9E9]/60 text-xs">Price</p>
+                        <p className="text-[#E16428] text-sm font-bold">
+                          LKR {project.price.toLocaleString()}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Employee Payment */}
+                    <div className="flex items-center gap-2">
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center ${project.paymentOfEmp < 0 ? 'bg-yellow-500/20' : 'bg-green-500/20'}`}>
+                        <svg className={`w-4 h-4 ${project.paymentOfEmp < 0 ? 'text-yellow-400' : 'text-green-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                        </svg>
+                        </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[#F6E9E9]/60 text-xs">Emp. Payment</p>
+                        <p className={`text-sm font-medium ${project.paymentOfEmp < 0 ? 'text-yellow-400' : 'text-green-400'}`}>
+                          LKR {project.paymentOfEmp.toLocaleString()}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Status selector */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-3 h-3 bg-[#E16428] rounded-full"></div>
+                      <span className="text-[#F6E9E9]/60 text-xs">Status</span>
+                    </div>
+                    <select
+                      value={project.status}
+                      onChange={(e) => updateProject(project.id, { status: e.target.value as Project['status'] })}
+                      className={`px-3 py-1.5 rounded-full text-xs font-medium border bg-transparent cursor-pointer transition-all duration-200 hover:scale-105 ${statusColors[project.status as keyof typeof statusColors] || 'bg-gray-500/20 text-gray-300 border-gray-500/30'}`}
+                    >
+                      {['Running', 'Pending', 'Delivered', 'Correction', 'Rejected'].map((status) => (
+                        <option key={status} value={status} className="bg-[#272121] text-[#F6E9E9]">
+                          {status}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               );
             })}
@@ -400,6 +472,48 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
               projectTypes={projectTypes}
               onClose={() => setReceiptProject(null)}
             />
+          )}
+          {/* Delete Confirmation Modal (mobile and desktop) */}
+          {confirmDeleteId && (
+            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn">
+              <div className="bg-[#272121] rounded-2xl p-6 max-w-md w-full mx-4 border border-[#E16428]/20 shadow-2xl animate-scaleIn">
+                <div className="text-center">
+                  {/* Warning Icon */}
+                  <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4 animate-bounce">
+                    <svg className="w-8 h-8 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9 9 4.03 9 9z" />
+                    </svg>
+                  </div>
+                  {/* Title */}
+                  <h3 className="text-xl font-bold text-[#F6E9E9] mb-2 font-['Poppins']">
+                    delete project?
+                  </h3>
+                  {/* Message */}
+                  <p className="text-[#F6E9E9]/70 mb-6 font-['Inter']">
+                    are you sure you want to delete this project?
+                    <br />
+                    <span className="text-xs text-[#F6E9E9]/50">
+                      this action cannot be undone.
+                    </span>
+                  </p>
+                  {/* Buttons */}
+                  <div className="flex space-x-3">
+                    <button
+                      onClick={() => setConfirmDeleteId(null)}
+                      className="flex-1 px-4 py-3 bg-[#363333] text-[#F6E9E9] rounded-lg hover:bg-[#363333]/80 transition-all duration-300 font-['Poppins']"
+                    >
+                      cancel
+                    </button>
+                    <button
+                      onClick={() => { handleDelete(confirmDeleteId); setConfirmDeleteId(null); }}
+                      className="flex-1 px-4 py-3 bg-gradient-to-r from-red-500 to-red-600 text-white rounded-lg hover:scale-105 transition-all duration-300 shadow-lg font-['Poppins']"
+                    >
+                      delete
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
           )}
         </>
       )}

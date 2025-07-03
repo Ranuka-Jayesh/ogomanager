@@ -31,17 +31,8 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
   const [receiptProject, setReceiptProject] = useState<Project | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const recordsPerPage = 7;
-  // Filter projects to only those created in the current month
-  const now = new Date();
-  const currentMonth = now.getMonth();
-  const currentYear = now.getFullYear();
-  const monthProjects = projects.filter(project => {
-    if (!project.createdAt) return false;
-    const created = new Date(project.createdAt);
-    return created.getMonth() === currentMonth && created.getFullYear() === currentYear;
-  });
-  const totalPages = Math.ceil(monthProjects.length / recordsPerPage);
-  const paginatedProjects = monthProjects.slice(
+  const totalPages = Math.ceil(projects.length / recordsPerPage);
+  const paginatedProjects = projects.slice(
     (currentPage - 1) * recordsPerPage,
     currentPage * recordsPerPage
   );
@@ -155,77 +146,158 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
       {/* Mobile Card View */}
       <div className="block lg:hidden">
         <div className="p-4 space-y-4">
-          {projects.map((project) => (
-            <div key={project.id} className="bg-[#272121]/30 rounded-lg p-4 border border-[#E16428]/10">
+          {projects.map((project) => {
+            const statusColors = {
+              'Running': 'bg-blue-500/20 text-blue-300 border-blue-500/30',
+              'Delivered': 'bg-green-500/20 text-green-300 border-green-500/30',
+              'Pending': 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30',
+              'Correction': 'bg-orange-500/20 text-orange-300 border-orange-500/30',
+              'Rejected': 'bg-red-500/20 text-red-300 border-red-500/30'
+            };
+            
+            return (
+              <div key={project.id} className="bg-gradient-to-br from-[#232021]/90 to-[#272121]/80 rounded-2xl border border-[#E16428]/20 p-4 shadow-lg hover:shadow-xl transition-all duration-300 relative overflow-hidden group">
+                {/* Status indicator line */}
+                <div className={`absolute top-0 left-0 right-0 h-1 ${statusColors[project.status as keyof typeof statusColors] || 'bg-gray-500/20'}`}></div>
+                
+                {/* Header with client info and actions */}
               <div className="flex items-start justify-between mb-3">
-                  <div className="flex-1">
-                  <h3 className="text-[#F6E9E9] font-semibold font-['Poppins']">
-                    {project.clientName}
-                  </h3>
-                  <p className="text-[#F6E9E9]/70 text-sm">{project.clientUniOrg}</p>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="w-2 h-2 bg-[#E16428] rounded-full"></div>
+                      <h3 className="text-[#F6E9E9] font-bold text-sm truncate">{project.clientName}</h3>
+                    </div>
+                    <p className="text-[#F6E9E9]/60 text-xs truncate">{project.clientUniOrg}</p>
                 </div>
-                  <div className="flex space-x-2 ml-2">
+                  
+                  {/* Action buttons */}
+                  <div className="flex items-center gap-1.5 ml-2">
                   <button
                     onClick={() => onEdit(project)}
-                      className="p-1.5 bg-[#E16428]/20 text-[#E16428] rounded-lg hover:bg-[#E16428]/30 transition-all duration-300"
-                  >
-                    <Edit className="w-4 h-4" />
-                  </button>
-                  <button
-                      onClick={() => handleDeleteClick(project)}
-                      className="p-1.5 bg-red-500/20 text-red-400 rounded-lg hover:bg-red-500/30 transition-all duration-300"
-                  >
-                    <Trash2 className="w-4 h-4" />
+                      className="p-2 bg-[#E16428]/20 text-[#E16428] rounded-xl hover:bg-[#E16428]/30 transition-all duration-200 hover:scale-110"
+                      title="Edit Project"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
                   </button>
                     <button
                       onClick={() => setReceiptProject(project)}
-                      className="p-1.5 bg-blue-500/20 text-blue-400 rounded-lg hover:bg-blue-500/30 transition-all duration-300"
-                      title="Download or share receipt"
+                      className="p-2 bg-blue-500/20 text-blue-400 rounded-xl hover:bg-blue-500/30 transition-all duration-200 hover:scale-110"
+                      title="View Receipt"
                     >
-                      <FileText className="w-4 h-4" />
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={() => handleDeleteClick(project)}
+                      className="p-2 bg-red-500/20 text-red-400 rounded-xl hover:bg-red-500/30 transition-all duration-200 hover:scale-110"
+                      title="Delete Project"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
                     </button>
                 </div>
               </div>
               
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                    <span className="text-[#F6E9E9]/70">Project Types:</span>
-                    <span className="text-[#F6E9E9] text-right max-w-[60%]">{getProjectTypeNames(project.projectDescription)}</span>
-                  </div>
-                  {project.fastDeliver && (
-                    <div className="flex justify-center">
-                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-[#E16428]/20 text-[#E16428] border border-[#E16428]/30">
-                        ⚡ fast delivery
+                {/* Project types with icons */}
+                <div className="flex flex-wrap gap-1.5 mb-3">
+                  {project.projectDescription.split(',').map((typeId, idx) => {
+                    const type = projectTypes.find(t => t.id === typeId.trim());
+                    return (
+                      <span key={idx} className="inline-flex items-center gap-1 bg-[#E16428]/15 text-[#E16428] rounded-full px-2.5 py-1 text-xs font-medium border border-[#E16428]/20">
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                        </svg>
+                        {type ? type.name : typeId.trim()}
                       </span>
-                </div>
+                    );
+                  })}
+                  {project.fastDeliver && (
+                    <span className="inline-flex items-center gap-1 bg-yellow-500/20 text-yellow-400 rounded-full px-2.5 py-1 text-xs font-medium border border-yellow-500/30">
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                      Fast
+                      </span>
                   )}
-                <div className="flex justify-between">
-                    <span className="text-[#F6E9E9]/70">Assigned To:</span>
-                  <span className="text-[#F6E9E9]">{getEmployeeName(project.assignedTo)}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-[#F6E9E9]/70">Deadline:</span>
-                  <span className="text-[#F6E9E9]">{new Date(project.deadlineDate).toLocaleDateString()}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[#F6E9E9]/70">Price:</span>
-                    <span className="text-[#E16428] font-bold text-xs sm:text-sm">LKR {project.price.toLocaleString()}</span>
+
+                {/* Project details grid */}
+                <div className="grid grid-cols-2 gap-3 mb-3">
+                  {/* Assigned To */}
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 bg-[#E16428]/20 rounded-full flex items-center justify-center">
+                      <svg className="w-4 h-4 text-[#E16428]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                      </svg>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[#F6E9E9]/60 text-xs">Assigned</p>
+                      <p className="text-[#F6E9E9] text-sm font-medium truncate">
+                        {getEmployeeName(project.assignedTo)}
+                      </p>
+                    </div>
                   </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-[#F6E9E9]/70">Emp. Payment:</span>
-                    <span className={`flex items-center gap-1 font-medium ${project.paymentOfEmp < 0 ? 'text-yellow-400' : 'text-green-400/80'}`}>
-                      {project.paymentOfEmp < 0 && (
-                        <AlertTriangle className="w-3.5 h-3.5 animate-pulse" />
-                      )}
-                      LKR {project.paymentOfEmp.toLocaleString()}
-                    </span>
+
+                  {/* Deadline */}
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 bg-blue-500/20 rounded-full flex items-center justify-center">
+                      <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                      </svg>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[#F6E9E9]/60 text-xs">Deadline</p>
+                      <p className="text-[#F6E9E9] text-sm font-medium">
+                        {new Date(project.deadlineDate).toLocaleDateString()}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Price */}
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 bg-green-500/20 rounded-full flex items-center justify-center">
+                      <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
+                      </svg>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[#F6E9E9]/60 text-xs">Price</p>
+                      <p className="text-[#E16428] text-sm font-bold">
+                        LKR {project.price.toLocaleString()}
+                      </p>
                 </div>
-                <div className="flex justify-between items-center pt-2">
-                  <span className="text-[#F6E9E9]/70">Status:</span>
+                  </div>
+
+                  {/* Employee Payment */}
+                  <div className="flex items-center gap-2">
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center ${project.paymentOfEmp < 0 ? 'bg-yellow-500/20' : 'bg-green-500/20'}`}>
+                      <svg className={`w-4 h-4 ${project.paymentOfEmp < 0 ? 'text-yellow-400' : 'text-green-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                      </svg>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[#F6E9E9]/60 text-xs">Emp. Payment</p>
+                      <p className={`text-sm font-medium ${project.paymentOfEmp < 0 ? 'text-yellow-400' : 'text-green-400'}`}>
+                      LKR {project.paymentOfEmp.toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Status selector */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 bg-[#E16428] rounded-full"></div>
+                    <span className="text-[#F6E9E9]/60 text-xs">Status</span>
+                  </div>
                   <select
                     value={project.status}
                     onChange={(e) => handleStatusChange(project.id, e.target.value as Project['status'])}
-                    className={`px-3 py-1 rounded-full text-xs font-medium border bg-transparent ${getStatusColor(project.status)}`}
+                    className={`px-3 py-1.5 rounded-full text-xs font-medium border bg-transparent cursor-pointer transition-all duration-200 hover:scale-105 ${statusColors[project.status as keyof typeof statusColors] || 'bg-gray-500/20 text-gray-300 border-gray-500/30'}`}
                   >
                     {statuses.map((status) => (
                       <option key={status} value={status} className="bg-[#272121] text-[#F6E9E9]">
@@ -235,8 +307,8 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
                   </select>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 

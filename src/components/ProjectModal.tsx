@@ -115,11 +115,20 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
   }, [project, nextProjectId]);
 
   useEffect(() => {
+    if (project && employees.length > 0) {
+      const assigned = employees.find(e => e.id === project.assignedTo) || null;
+      setSelectedEmployee(assigned);
+    } else if (!project) {
+      setSelectedEmployee(null);
+    }
+  }, [project, employees]);
+
+  // Sync selectedEmployee with formData.assignedTo
+  useEffect(() => {
     setFormData(prev => ({
       ...prev,
       assignedTo: selectedEmployee ? selectedEmployee.id : ''
     }));
-    // eslint-disable-next-line
   }, [selectedEmployee]);
 
   const handleTypeChange = (id: string) => {
@@ -144,6 +153,11 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
     } else {
       setProjectIdError(null);
     }
+    
+    // Debug: Log the assignedTo field
+    console.log('Submitting project with assignedTo:', formData.assignedTo);
+    console.log('Selected employee:', selectedEmployee);
+    
     // Join projectTypes as a comma-separated string for DB compatibility
     onSave({
       ...formData,

@@ -10,7 +10,8 @@ import { LoginPage } from "./components/LoginPage";
 import { useProjects } from "./hooks/useProjects";
 import { useEmployees } from "./hooks/useEmployees";
 import { supabase } from "./supabaseClient";
-import { LogOut, X } from "lucide-react";
+import { LogOut } from "lucide-react";
+import LoadingScreen from "./components/LoadingScreen";
 
 interface SessionData {
   email: string;
@@ -20,12 +21,13 @@ interface SessionData {
 
 export function App() {
   const [activeTab, setActiveTab] = useState("dashboard");
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [minLoadingDone, setMinLoadingDone] = useState(false);
 
   const { projects } = useProjects();
   const { employees } = useEmployees();
@@ -60,6 +62,9 @@ export function App() {
     };
 
     checkExistingSession();
+    // Minimum 5 seconds loading
+    const timer = setTimeout(() => setMinLoadingDone(true), 5000);
+    return () => clearTimeout(timer);
   }, []);
 
   const createSession = (email: string) => {
@@ -137,16 +142,8 @@ export function App() {
     }
   };
 
-  // Show loading state while checking session
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-[#363333] via-[#272121] to-[#363333] flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-16 h-16 border-4 border-[#E16428] border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-[#F6E9E9] font-medium">Loading session...</p>
-        </div>
-      </div>
-    );
+  if (isLoading || !minLoadingDone) {
+    return <LoadingScreen />;
   }
 
   if (!isAuthenticated) {

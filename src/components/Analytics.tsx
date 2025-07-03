@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
-import { TrendingUp, DollarSign, Users, Calendar, Clock } from 'lucide-react';
+import React, { useMemo, useState, useEffect } from 'react';
+import { TrendingUp, DollarSign, Users, Calendar, Clock, Download, Lock, X } from 'lucide-react';
 import { Project, Employee } from '../types';
 import { GlassCard } from './GlassCard';
 import ReportModal from './ReportModal';
+import { supabase } from '../supabaseClient';
 
 interface AnalyticsProps {
   projects: Project[];
@@ -22,6 +23,24 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees }) => 
   const [selectedMonth, setSelectedMonth] = useState<'all' | number>(new Date().getMonth());
   const [selectedYear, setSelectedYear] = useState<'all' | number>(new Date().getFullYear());
   const [showReport, setShowReport] = useState(false);
+  const [projectTypes, setProjectTypes] = useState<{ id: string; name: string }[]>([]);
+  
+  // Login modal state
+  const [showLoginModal, setShowLoginModal] = useState(false);
+  const [adminPassword, setAdminPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+
+  // Fetch project types on mount
+  useEffect(() => {
+    async function fetchProjectTypes() {
+      const { data, error } = await supabase.from('project_types').select('*');
+      if (!error && data) {
+        setProjectTypes(data);
+      }
+    }
+    fetchProjectTypes();
+  }, []);
 
   // Calculate year range dynamically for the year dropdown
   const projectYears = projects
@@ -60,8 +79,10 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees }) => 
   const monthlyData = useMemo(() => {
     const months: Record<string, MonthlyData> = {};
     
-    projects.forEach(project => {
-      const date = new Date(project.deadlineDate);
+    filteredProjects.forEach(project => {
+      if (!project.createdAt) return;
+      
+      const date = new Date(project.createdAt);
       const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
       
       if (!months[monthKey]) {
@@ -84,7 +105,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees }) => 
     });
     
     return Object.values(months).sort((a, b) => a.month.localeCompare(b.month));
-  }, [projects]);
+  }, [filteredProjects]);
 
   // All analytics below use filteredProjects
   const totalRevenue = filteredProjects.reduce((sum, project) => sum + project.price, 0);
@@ -119,6 +140,169 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees }) => 
     });
     return distribution;
   }, [filteredProjects]);
+
+  // Admin authentication function
+  const authenticateAdmin = async (password: string) => {
+    try {
+      setIsAuthenticating(true);
+      setLoginError('');
+      
+      const { data, error } = await supabase
+        .from('admin')
+        .select('id, email, password')
+        .eq('password', password)
+        .single();
+      
+      if (error || !data) {
+        // Log failed authentication attempt
+        await logAction(null, 'Unknown', 'export_fail');
+        setLoginError('Invalid password. Please try again.');
+        return false;
+      }
+      
+      // Log successful authentication and export
+      await logAction(data.id, data.email, 'export_success');
+      
+      return true;
+    } catch (error) {
+      console.error('Authentication error:', error);
+      // Log authentication error
+      await logAction(null, 'Unknown', 'export_fail');
+      setLoginError('Authentication failed. Please try again.');
+      return false;
+    } finally {
+      setIsAuthenticating(false);
+    }
+  };
+
+  // Log action to database
+  const logAction = async (adminId: string | null, adminEmail: string, action: string) => {
+    try {
+      const { error } = await supabase
+        .from('log')
+        .insert({
+          admin_id: adminId,
+          admin_email: adminEmail,
+          action: action
+        });
+      
+      if (error) {
+        console.error('Error logging action:', error);
+      }
+    } catch (error) {
+      console.error('Failed to log action:', error);
+    }
+  };
+
+  // Handle login submit
+  const handleLoginSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!adminPassword.trim()) {
+      setLoginError('Please enter a password.');
+      return;
+    }
+    
+    const isAuthenticated = await authenticateAdmin(adminPassword);
+    
+    if (isAuthenticated) {
+      setShowLoginModal(false);
+      setAdminPassword('');
+      setLoginError('');
+      // Proceed with export
+      exportToExcel();
+    }
+  };
+
+  // Excel export function (now called after authentication)
+  const exportToExcel = () => {
+    // Create CSV content
+    const headers = [
+      'ID',
+      'Project ID',
+      'Client Name',
+      'Client Uni/Org',
+      'Project Description',
+      'Deadline Date',
+      'Price',
+      'Advance',
+      'Assigned To',
+      'Payment of Employee',
+      'Status',
+      'Fast Deliver',
+      'Created At',
+      'Updated At'
+    ];
+
+    const csvContent = [
+      headers.join(','),
+      ...filteredProjects.map(project => {
+        const assignedEmployee = employees.find(emp => emp.id === project.assignedTo);
+        const assignedToName = assignedEmployee ? `${assignedEmployee.firstName} ${assignedEmployee.lastName}` : 'Unassigned';
+        
+        // Convert project type IDs to names
+        const getProjectTypeNames = (projectDescription: string) => {
+          if (!projectDescription) return 'No types specified';
+          const typeIds = projectDescription.split(',').map(id => id.trim());
+          const typeNames = typeIds.map(id => {
+            const type = projectTypes.find(t => t.id === id);
+            return type ? type.name : `Unknown Type (${id})`;
+          });
+          return typeNames.join(', ');
+        };
+        
+        return [
+          project.id,
+          project.projectId,
+          `"${project.clientName}"`,
+          `"${project.clientUniOrg}"`,
+          `"${getProjectTypeNames(project.projectDescription)}"`,
+          project.deadlineDate,
+          project.price,
+          project.advance,
+          `"${assignedToName}"`,
+          project.paymentOfEmp,
+          project.status,
+          project.fastDeliver ? 'Yes' : 'No',
+          project.createdAt,
+          project.updatedAt
+        ].join(',');
+      })
+    ].join('\n');
+
+    // Create and download file
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    
+    // Generate filename based on selected filters
+    let filename = 'projects_export';
+    if (selectedMonth !== 'all' && selectedYear !== 'all') {
+      const monthName = new Date(0, selectedMonth).toLocaleString('default', { month: 'long' });
+      filename = `projects_${monthName}_${selectedYear}`;
+    } else if (selectedMonth !== 'all') {
+      const monthName = new Date(0, selectedMonth).toLocaleString('default', { month: 'long' });
+      filename = `projects_${monthName}_all_years`;
+    } else if (selectedYear !== 'all') {
+      filename = `projects_${selectedYear}`;
+    } else {
+      filename = 'projects_all_time';
+    }
+    
+    link.setAttribute('download', `${filename}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Handle export button click (triggers login)
+  const handleExportClick = () => {
+    setShowLoginModal(true);
+    setAdminPassword('');
+    setLoginError('');
+  };
 
   return (
     <div className="space-y-8 animate-fadeIn">
@@ -259,7 +443,8 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees }) => 
               </tr>
             </thead>
             <tbody>
-              {monthlyData.map((month: any) => (
+              {monthlyData.length > 0 ? (
+                monthlyData.map((month: any) => (
                 <tr key={month.month} className="border-b border-[#E16428]/10 text-xs sm:text-sm">
                   <td className="py-2 sm:py-3 px-1 text-[#F6E9E9] font-['Inter'] whitespace-nowrap">
                     {new Date(month.month + '-01').toLocaleDateString('en-US', { 
@@ -276,7 +461,17 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees }) => 
                     LKR {(month.revenue - month.employeePayments).toLocaleString()}
                   </td>
                 </tr>
-              ))}
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={5} className="py-8 text-center text-[#F6E9E9]/70 font-['Inter']">
+                    {selectedMonth === 'all' && selectedYear === 'all' 
+                      ? 'No projects found in the database'
+                      : `No projects found for the selected ${selectedMonth !== 'all' ? 'month' : ''}${selectedMonth !== 'all' && selectedYear !== 'all' ? ' and ' : ''}${selectedYear !== 'all' ? 'year' : ''}`
+                    }
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -319,7 +514,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees }) => 
           </h2>
           <div className="space-y-3 sm:space-y-4">
             {(Object.entries(statusDistribution) as [string, number][]).map(([status, count]) => {
-              const percentage = (count / projects.length) * 100;
+              const percentage = (count / filteredProjects.length) * 100;
               const getStatusColor = (status: string) => {
                 switch (status) {
                   case 'Running': return 'bg-blue-500';
@@ -352,6 +547,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees }) => 
       </div>
 
       <div className="flex justify-center sm:justify-between items-center mb-6">
+        <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
         <button
           onClick={() => setShowReport(true)}
           className="flex items-center gap-2 px-6 sm:px-7 py-2 sm:py-3 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white rounded-full shadow-xl font-['Poppins'] font-bold text-sm sm:text-lg transition-all duration-200 hover:scale-105 hover:shadow-2xl active:scale-95 border-2 border-[#E16428]/40 focus:outline-none focus:ring-2 focus:ring-[#E16428]/40"
@@ -359,6 +555,18 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees }) => 
           <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 sm:w-6 sm:h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
           <span className="tracking-wide">Generate Report</span>
         </button>
+          
+          <button
+            onClick={handleExportClick}
+            disabled={filteredProjects.length === 0}
+            className="flex items-center gap-2 px-6 sm:px-7 py-2 sm:py-3 bg-gradient-to-r from-green-600 to-green-700 text-white rounded-full shadow-xl font-['Poppins'] font-bold text-sm sm:text-lg transition-all duration-200 hover:scale-105 hover:shadow-2xl active:scale-95 border-2 border-green-500/40 focus:outline-none focus:ring-2 focus:ring-green-500/40 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+          >
+            <Download className="w-5 h-5 sm:w-6 sm:h-6" />
+            <span className="tracking-wide">
+              {filteredProjects.length === 0 ? 'No Data to Export' : 'Export Excel'}
+            </span>
+          </button>
+        </div>
         <div className="hidden sm:block" />
       </div>
 
@@ -371,6 +579,69 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees }) => 
           month={selectedMonth}
           year={selectedYear}
         />
+      )}
+
+      {/* Admin Login Modal */}
+      {showLoginModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn p-4">
+          <div className="bg-[#272121] border border-[#E16428]/30 rounded-2xl shadow-2xl p-6 sm:p-8 max-w-md w-full scale-100 animate-popIn">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-[#E16428]/20 rounded-full">
+                  <Lock className="w-6 h-6 text-[#E16428]" />
+                </div>
+                <h3 className="text-xl font-bold text-[#F6E9E9] font-['Poppins']">
+                  Admin Authentication
+                </h3>
+              </div>
+              <button
+                onClick={() => setShowLoginModal(false)}
+                className="p-2 hover:bg-[#363333]/60 rounded-full transition-colors"
+              >
+                <X className="w-5 h-5 text-[#F6E9E9]/70" />
+              </button>
+            </div>
+            
+            <form onSubmit={handleLoginSubmit} className="space-y-4">
+              <div>
+                <label className="block text-[#F6E9E9] text-sm font-medium mb-2 font-['Inter']">
+                  Admin Password
+                </label>
+                <input
+                  type="password"
+                  value={adminPassword}
+                  onChange={(e) => setAdminPassword(e.target.value)}
+                  className="w-full px-4 py-3 bg-[#363333]/60 border border-[#E16428]/30 rounded-lg text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200"
+                  placeholder="Enter admin password"
+                  autoFocus
+                />
+              </div>
+              
+              {loginError && (
+                <div className="p-3 bg-red-500/20 border border-red-500/30 rounded-lg">
+                  <p className="text-red-400 text-sm font-['Inter']">{loginError}</p>
+                </div>
+              )}
+              
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowLoginModal(false)}
+                  className="flex-1 px-4 py-3 bg-[#363333]/60 text-[#F6E9E9] rounded-lg hover:bg-[#E16428]/10 transition-all duration-200 font-['Poppins'] font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isAuthenticating}
+                  className="flex-1 px-4 py-3 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white rounded-lg shadow-lg hover:scale-105 transition-all duration-200 font-['Poppins'] font-bold disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+                >
+                  {isAuthenticating ? 'Authenticating...' : 'Export Data'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );

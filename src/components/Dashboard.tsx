@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { DollarSign, Clock, CheckCircle, Users } from 'lucide-react';
 import { Project, Employee } from '../types';
 import { GlassCard } from './GlassCard';
@@ -11,12 +11,39 @@ interface DashboardProps {
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({ projects, employees }) => {
-  const { status } = useSupabaseConnection();
-  const totalRevenue = projects.reduce((sum, project) => sum + project.price, 0);
-  const completedProjects = projects.filter(p => p.status === 'Delivered').length;
-  const runningProjects = projects.filter(p => p.status === 'Running').length;
+  useSupabaseConnection();
   const now = new Date();
+  const [selectedMonth, setSelectedMonth] = useState(now.getMonth());
+  const [selectedYear, setSelectedYear] = useState(now.getFullYear());
   const [projectTypes, setProjectTypes] = React.useState<{ id: string; name: string }[]>([]);
+
+  // Filter projects by selected month and year
+  const filteredProjects = projects.filter(project => {
+    if (!project.createdAt) return false;
+    const created = new Date(project.createdAt);
+    return created.getMonth() === selectedMonth && created.getFullYear() === selectedYear;
+  });
+
+  // Calculate year range dynamically for the year dropdown
+  const projectYears = projects
+    .map(p => {
+      if (p.createdAt) {
+        const year = new Date(p.createdAt).getFullYear();
+        return typeof year === 'number' && !isNaN(year) ? year : undefined;
+      }
+      return undefined;
+    })
+    .filter((y): y is number => typeof y === 'number');
+  const minYear = projectYears.length ? Math.min(...projectYears) : now.getFullYear() - 3;
+  const maxYear = projectYears.length ? Math.max(...projectYears) : now.getFullYear() + 2;
+  const years: number[] = [];
+  for (let y = maxYear; y >= minYear; y--) {
+    years.push(y);
+  }
+
+  const totalRevenue = filteredProjects.reduce((sum, project) => sum + project.price, 0);
+  const completedProjects = filteredProjects.filter(p => p.status === 'Delivered').length;
+  const runningProjects = filteredProjects.filter(p => p.status === 'Running').length;
 
   React.useEffect(() => {
     async function fetchTypes() {
@@ -67,10 +94,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees }) => 
     },
   ];
 
-  const recentProjects = projects.slice(0, 3);
+  const allRecentProjects = projects.slice(0, 3);
 
   // Upcoming deliverables: 3 nearest running projects by deadline (ascending)
-  const upcomingProjects = projects
+  const allUpcomingProjects = projects
     .filter(p => p.status === 'Running')
     .sort((a, b) => new Date(a.deadlineDate).getTime() - new Date(b.deadlineDate).getTime())
     .slice(0, 3);
@@ -83,12 +110,38 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees }) => 
 
   return (
     <div className="space-y-6 sm:space-y-8 animate-fadeIn">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <h1 className="text-2xl sm:text-3xl font-bold text-[#F6E9E9] font-['Playfair_Display']">
-          Dashboard Overview
-        </h1>
-        <div className="text-sm text-[#F6E9E9]/60 font-['Inter']">
-          Last update: {now.toLocaleDateString()} {now.toLocaleTimeString()}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center sm:justify-between gap-4">
+        <div className="flex flex-row items-center justify-between w-full">
+          <h1 className="text-2xl sm:text-3xl font-bold text-[#F6E9E9] font-['Playfair_Display']">
+            Dashboard Overview
+          </h1>
+          <div className="flex flex-row gap-2 ml-auto">
+            <select
+              value={selectedMonth}
+              onChange={e => setSelectedMonth(Number(e.target.value))}
+              className="pl-3 pr-3 py-2 bg-[#272121]/70 border border-[#E16428]/50 rounded-lg text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200 hover:border-[#E16428] focus:ring-2 focus:ring-[#E16428]/40 sm:text-sm text-xs shadow-sm hover:shadow-md focus:shadow-lg cursor-pointer"
+            >
+              {Array.from({ length: 12 }).map((_, i) => (
+                <option key={i} value={i} className="bg-[#272121] text-[#F6E9E9]">
+                  {new Date(0, i).toLocaleString('default', { month: 'long' })}
+                </option>
+              ))}
+            </select>
+            <select
+              value={selectedYear}
+              onChange={e => setSelectedYear(Number(e.target.value))}
+              className="pl-3 pr-3 py-2 bg-[#272121]/70 border border-[#E16428]/50 rounded-lg text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200 hover:border-[#E16428] focus:ring-2 focus:ring-[#E16428]/40 sm:text-sm text-xs shadow-sm hover:shadow-md focus:shadow-lg cursor-pointer"
+            >
+              {years.map(year => (
+                <option key={year} value={year} className="bg-[#272121] text-[#F6E9E9]">{year}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div className="order-1 sm:order-2 w-full sm:w-auto">
+          <span className="text-sm text-[#F6E9E9]/60 font-['Inter'] block text-left sm:text-right">
+            Last update: {now.toLocaleDateString()} {now.toLocaleTimeString()}
+          </span>
         </div>
       </div>
 
@@ -119,7 +172,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees }) => 
             Recent Projects
           </h2>
           <div className="space-y-3">
-            {recentProjects.map((project) => (
+            {allRecentProjects.map((project) => (
               <div
                 key={project.id}
                 className="flex flex-col gap-1 p-3 bg-[#232021]/80 rounded-xl border border-[#E16428]/10 hover:border-[#E16428]/30 transition-all duration-300 shadow-sm"
@@ -159,10 +212,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees }) => 
             Upcoming Project Deliverables
           </h2>
           <div className="space-y-3">
-            {upcomingProjects.length === 0 ? (
+            {allUpcomingProjects.length === 0 ? (
               <div className="text-[#F6E9E9]/60 text-sm">No upcoming running projects</div>
             ) : (
-              upcomingProjects.map((project) => (
+              allUpcomingProjects.map((project) => (
                 <div
                   key={project.id}
                   className="flex flex-col gap-1 p-3 bg-[#232021]/80 rounded-xl border border-[#E16428]/10 hover:border-[#E16428]/30 transition-all duration-300 shadow-sm"
@@ -195,8 +248,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees }) => 
           </h2>
           <div className="space-y-3">
             {employees.slice(0, 5).map((employee) => {
-              const employeeProjects = projects.filter(p => p.assignedTo === employee.id);
-              const completedCount = employeeProjects.filter(p => p.status === 'Delivered').length;
+              const filteredEmployeeProjects = filteredProjects.filter(p => p.assignedTo === employee.id);
+              const completedCount = filteredEmployeeProjects.filter(p => p.status === 'Delivered').length;
               
               return (
                 <div
@@ -216,7 +269,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees }) => 
                       {completedCount} completed
                     </p>
                     <p className="text-[#F6E9E9]/70 text-xs">
-                      {employeeProjects.length} total
+                      {filteredEmployeeProjects.length} total
                     </p>
                   </div>
                 </div>

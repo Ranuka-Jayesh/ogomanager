@@ -109,7 +109,7 @@ export const Navigation: React.FC<NavigationProps> = ({
             </button>
             <div className={`transition-all duration-300 ${collapsed ? 'opacity-0 h-0 overflow-hidden' : 'opacity-100'}`}>
               <p className="text-xs text-center text-[#F6E9E9]/50 font-['Poppins']">
-                ogo manager V.01
+                ogo manager V.04
               </p>
               <p className="text-xs text-center text-[#F6E9E9]/30 font-['Poppins'] mt-1">
                 2025
@@ -126,11 +126,15 @@ export const Navigation: React.FC<NavigationProps> = ({
         <div className="p-4 flex-1 overflow-y-auto">
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center space-x-3">
-              <div className="w-8 h-8 bg-gradient-to-r from-[#E16428] to-[#F6E9E9] rounded-lg flex items-center justify-center">
-                <Home className="w-4 h-4 text-white" />
+              <div className="w-10 h-10 flex items-center justify-center">
+                <img
+                  src="/2OGOlogo.png"
+                  alt="OGO Logo"
+                  className="w-10 h-10 object-contain rounded-xl shadow-lg p-1 border-0 sm:border-2 sm:border-white"
+                />
               </div>
               <h2 className="text-lg font-bold text-[#F6E9E9] font-['Playfair_Display']">
-                ogo Manager Pro
+                Manager Pro
               </h2>
             </div>
             <button
@@ -178,7 +182,7 @@ export const Navigation: React.FC<NavigationProps> = ({
             <span className="font-medium">Logout</span>
           </button>
           <p className="text-xs text-center text-[#F6E9E9]/50 font-['Poppins']">
-            ogo manager V.01
+            ogo manager V.04
           </p>
           <p className="text-xs text-center text-[#F6E9E9]/30 font-['Poppins'] mt-1">
             2025

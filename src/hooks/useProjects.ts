@@ -7,6 +7,39 @@ export const useProjects = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Map database row to Project object
+  const mapProjectFromDB = (project: any): Project => ({
+    id: project.id,
+    projectId: project.project_id,
+    clientName: project.client_name,
+    clientUniOrg: project.client_uni_org,
+    projectDescription: project.project_description,
+    deadlineDate: project.deadline_date,
+    price: project.price,
+    advance: project.advance,
+    assignedTo: project.assigned_to,
+    paymentOfEmp: project.payment_of_emp,
+    status: project.status,
+    fastDeliver: project.fast_deliver || false,
+    createdAt: project.created_at,
+    updatedAt: project.updated_at,
+  });
+
+  // Map Project object to database row
+  const mapProjectToDB = (project: Omit<Project, 'id'>) => ({
+    project_id: project.projectId,
+    client_name: project.clientName,
+    client_uni_org: project.clientUniOrg,
+    project_description: project.projectDescription,
+    deadline_date: project.deadlineDate,
+    price: project.price,
+    advance: project.advance,
+    assigned_to: project.assignedTo || null,
+    payment_of_emp: project.paymentOfEmp,
+    status: project.status,
+    fast_deliver: (project as any).fastDeliver || false,
+  });
+
   // Fetch all projects from database
   const fetchProjects = async () => {
     try {
@@ -24,24 +57,7 @@ export const useProjects = () => {
         return;
       }
 
-      // Map snake_case to camelCase
-      const mappedProjects = (data || []).map(project => ({
-        id: project.id,
-        projectId: project.project_id,
-        clientName: project.client_name,
-        clientUniOrg: project.client_uni_org,
-        projectDescription: project.project_description,
-        deadlineDate: project.deadline_date,
-        price: project.price,
-        advance: project.advance,
-        assignedTo: project.assigned_to,
-        paymentOfEmp: project.payment_of_emp,
-        status: project.status,
-        fastDeliver: project.fast_deliver || false,
-        createdAt: project.created_at,
-        updatedAt: project.updated_at,
-      }));
-
+      const mappedProjects = (data || []).map(mapProjectFromDB);
       setProjects(mappedProjects);
       console.log('Fetched projects:', mappedProjects);
     } catch (err) {
@@ -57,20 +73,11 @@ export const useProjects = () => {
     try {
       setError(null);
       
-      // Map camelCase to snake_case for database
-      const projectData = {
-        project_id: project.projectId,
-        client_name: project.clientName,
-        client_uni_org: project.clientUniOrg,
-        project_description: project.projectDescription,
-        deadline_date: project.deadlineDate,
-        price: project.price,
-        advance: project.advance,
-        assigned_to: project.assignedTo || null,
-        payment_of_emp: project.paymentOfEmp,
-        status: project.status,
-        fast_deliver: (project as any).fastDeliver || false,
-      };
+      const projectData = mapProjectToDB(project);
+      
+      // Debug: Log the assignedTo field being saved
+      console.log('Saving project to database with assigned_to:', projectData.assigned_to);
+      console.log('Original project assignedTo:', project.assignedTo);
 
       const { data, error: insertError } = await supabase
         .from('projects')
@@ -84,24 +91,7 @@ export const useProjects = () => {
         return;
       }
 
-      // Map the returned data to camelCase
-      const newProject: Project = {
-        id: data.id,
-        projectId: data.project_id,
-        clientName: data.client_name,
-        clientUniOrg: data.client_uni_org,
-        projectDescription: data.project_description,
-        deadlineDate: data.deadline_date,
-        price: data.price,
-        advance: data.advance,
-        assignedTo: data.assigned_to,
-        paymentOfEmp: data.payment_of_emp,
-        status: data.status,
-        fastDeliver: data.fast_deliver || false,
-        createdAt: data.created_at,
-        updatedAt: data.updated_at,
-      };
-
+      const newProject = mapProjectFromDB(data);
       setProjects(prev => [newProject, ...prev]);
       console.log('Added new project:', newProject);
     } catch (err) {
@@ -115,7 +105,6 @@ export const useProjects = () => {
     try {
       setError(null);
       
-      // Map camelCase to snake_case for database
       const updateData: any = {};
       if (updates.projectId !== undefined) updateData.project_id = updates.projectId;
       if (updates.clientName !== undefined) updateData.client_name = updates.clientName;
@@ -142,24 +131,7 @@ export const useProjects = () => {
         return;
       }
 
-      // Map the returned data to camelCase
-      const updatedProject: Project = {
-        id: data.id,
-        projectId: data.project_id,
-        clientName: data.client_name,
-        clientUniOrg: data.client_uni_org,
-        projectDescription: data.project_description,
-        deadlineDate: data.deadline_date,
-        price: data.price,
-        advance: data.advance,
-        assignedTo: data.assigned_to,
-        paymentOfEmp: data.payment_of_emp,
-        status: data.status,
-        fastDeliver: data.fast_deliver || false,
-        createdAt: data.created_at,
-        updatedAt: data.updated_at,
-      };
-
+      const updatedProject = mapProjectFromDB(data);
       setProjects(prev => 
         prev.map(project => 
           project.id === id ? updatedProject : project
@@ -196,9 +168,20 @@ export const useProjects = () => {
     }
   };
 
-  // Fetch projects on component mount
+  // Set up real-time subscriptions
   useEffect(() => {
     fetchProjects();
+
+    // Create a single channel instance
+    const channel = supabase.channel('projects_changes');
+    
+    // Subscribe to real-time changes
+
+    // Cleanup subscription on unmount
+    return () => {
+      console.log('Cleaning up projects subscription');
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   return {

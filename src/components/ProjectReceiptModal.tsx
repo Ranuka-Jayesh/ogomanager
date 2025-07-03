@@ -78,13 +78,18 @@ export const ProjectReceiptModal: React.FC<ProjectReceiptModalProps> = ({ projec
           {/* Logo and header */}
           <div className="flex flex-col items-center pt-6 pb-2 px-6">
             <img src="/Logo.jpg" alt="OGO Technology" className="w-20 h-20 rounded-full mb-2 shadow-lg border-4 border-white bg-white" />
-            <div className="text-base sm:text-lg font-bold text-[#363333] mb-1 font-['Poppins'] tracking-tight">Project Receipt</div>
-            <div className="text-xs text-[#E16428] font-bold tracking-widest uppercase mb-1">ogo technology</div>
-            <div className="text-xs text-[#363333]/80 mb-2 font-semibold">Department of OGO Assignment</div>
+            <div className="text-base sm:text-lg font-bold text-[#363333] mb-1 font-['Poppins'] tracking-tight">ogo Assignment</div>
+            <div className="text-xs text-[#E16428] font-bold tracking-widest uppercase mb-1">Department of Academic</div>
+            <div className="text-xs text-[#363333]/80 mb-1 font-semibold">in ogo technology</div>
+            <div className="text-xs text-[#363333]/70 mb-2">Contact +94 75 930 7059</div>
           </div>
           {/* Details section */}
           <div className="px-6 pb-2">
             <div className="divide-y divide-[#E16428]/10">
+              <div className="flex justify-between py-2">
+                <span className="text-xs text-[#363333]/80 font-medium">Project ID</span>
+                <span className="text-xs text-[#363333] font-semibold text-right">{project.projectId}</span>
+              </div>
               <div className="flex justify-between py-2">
                 <span className="text-xs text-[#363333]/80 font-medium">Client</span>
                 <span className="text-xs text-[#363333] font-semibold text-right">{project.clientName}</span>

@@ -7,6 +7,34 @@ export const useEmployees = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Map database row to Employee object
+  const mapEmployeeFromDB = (employee: any): Employee => ({
+    id: employee.id,
+    employeeId: employee.employee_id,
+    birthday: employee.birthday,
+    firstName: employee.first_name,
+    lastName: employee.last_name,
+    position: employee.position,
+    address: employee.address,
+    whatsappNumber: employee.whatsapp,
+    emailAddress: employee.email,
+    qualifications: employee.qualifications,
+    createdAt: employee.created_at,
+  });
+
+  // Map Employee object to database row
+  const mapEmployeeToDB = (employee: Omit<Employee, 'id'>) => ({
+    employee_id: employee.employeeId,
+    birthday: employee.birthday,
+    first_name: employee.firstName,
+    last_name: employee.lastName,
+    position: employee.position,
+    address: employee.address,
+    whatsapp: employee.whatsappNumber,
+    email: employee.emailAddress,
+    qualifications: employee.qualifications,
+  });
+
   // Fetch all employees from database
   const fetchEmployees = async () => {
     try {
@@ -24,21 +52,7 @@ export const useEmployees = () => {
         return;
       }
 
-      // Map snake_case to camelCase
-      const mappedEmployees = (data || []).map(employee => ({
-        id: employee.id,
-        employeeId: employee.employee_id,
-        birthday: employee.birthday,
-        firstName: employee.first_name,
-        lastName: employee.last_name,
-        position: employee.position,
-        address: employee.address,
-        whatsappNumber: employee.whatsapp,
-        emailAddress: employee.email,
-        qualifications: employee.qualifications,
-        createdAt: employee.created_at,
-      }));
-
+      const mappedEmployees = (data || []).map(mapEmployeeFromDB);
       setEmployees(mappedEmployees);
       console.log('Fetched employees:', mappedEmployees);
     } catch (err) {
@@ -54,18 +68,7 @@ export const useEmployees = () => {
     try {
       setError(null);
       
-      // Map camelCase to snake_case for database
-      const employeeData = {
-        employee_id: employee.employeeId,
-        birthday: employee.birthday,
-        first_name: employee.firstName,
-        last_name: employee.lastName,
-        position: employee.position,
-        address: employee.address,
-        whatsapp: employee.whatsappNumber,
-        email: employee.emailAddress,
-        qualifications: employee.qualifications,
-      };
+      const employeeData = mapEmployeeToDB(employee);
 
       const { data, error: insertError } = await supabase
         .from('employees')
@@ -79,21 +82,7 @@ export const useEmployees = () => {
         return;
       }
 
-      // Map the returned data to camelCase
-      const newEmployee: Employee = {
-        id: data.id,
-        employeeId: data.employee_id,
-        birthday: data.birthday,
-        firstName: data.first_name,
-        lastName: data.last_name,
-        position: data.position,
-        address: data.address,
-        whatsappNumber: data.whatsapp,
-        emailAddress: data.email,
-        qualifications: data.qualifications,
-        createdAt: data.created_at,
-      };
-
+      const newEmployee = mapEmployeeFromDB(data);
       setEmployees(prev => [newEmployee, ...prev]);
       console.log('Added new employee:', newEmployee);
     } catch (err) {
@@ -107,7 +96,6 @@ export const useEmployees = () => {
     try {
       setError(null);
       
-      // Map camelCase to snake_case for database
       const updateData: any = {};
       if (updates.employeeId !== undefined) updateData.employee_id = updates.employeeId;
       if (updates.birthday !== undefined) updateData.birthday = updates.birthday;
@@ -132,23 +120,9 @@ export const useEmployees = () => {
         return;
       }
 
-      // Map the returned data to camelCase
-      const updatedEmployee: Employee = {
-        id: data.id,
-        employeeId: data.employee_id,
-        birthday: data.birthday,
-        firstName: data.first_name,
-        lastName: data.last_name,
-        position: data.position,
-        address: data.address,
-        whatsappNumber: data.whatsapp,
-        emailAddress: data.email,
-        qualifications: data.qualifications,
-        createdAt: data.created_at,
-      };
-
-    setEmployees(prev => 
-      prev.map(employee => 
+      const updatedEmployee = mapEmployeeFromDB(data);
+      setEmployees(prev => 
+        prev.map(employee => 
           employee.id === id ? updatedEmployee : employee
         )
       );
@@ -175,7 +149,7 @@ export const useEmployees = () => {
         return;
       }
 
-    setEmployees(prev => prev.filter(employee => employee.id !== id));
+      setEmployees(prev => prev.filter(employee => employee.id !== id));
       console.log('Deleted employee with ID:', id);
     } catch (err) {
       console.error('Error in deleteEmployee:', err);
@@ -183,9 +157,20 @@ export const useEmployees = () => {
     }
   };
 
-  // Fetch employees on component mount
+  // Set up real-time subscriptions
   useEffect(() => {
     fetchEmployees();
+
+    // Create a single channel instance
+    const channel = supabase.channel('employees_changes');
+    
+    // Subscribe to real-time changes
+
+    // Cleanup subscription on unmount
+    return () => {
+      console.log('Cleaning up employees subscription');
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   return {
