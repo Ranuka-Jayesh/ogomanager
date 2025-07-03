@@ -3,7 +3,7 @@
 **OGO Manager** is a modern, full-featured web application designed to help you efficiently manage employees and projects. It offers insightful analytics, detailed reporting, and seamless collaboration — all wrapped in a sleek, responsive interface.
 
 ---
-
+<img src="public/Recording 2025-07-03 231528.gif" width="100%">
 ---
 
 ## 🎯 Key Features
