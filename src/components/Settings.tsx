@@ -76,6 +76,18 @@ export const Settings: React.FC = () => {
     setPasswordMsg('Password change feature not implemented in this demo.');
   }
 
+  // ESC key handler to close delete modal
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && showDeleteModal) {
+        setShowDeleteModal(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showDeleteModal]);
+
   return (
     <div className="max-w-2xl mx-auto py-4 sm:py-8 px-2 sm:px-4 animate-fadeIn">
       {/* Tabs */}

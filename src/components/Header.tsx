@@ -54,18 +54,38 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle }) => {
     }
   };
 
-  // Keyboard shortcut for refresh
+  // Keyboard shortcuts
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      // Ctrl + R: Refresh (only when not in input fields)
       if ((event.ctrlKey || event.metaKey) && event.key === 'r') {
+        if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement) {
+          return;
+        }
         event.preventDefault();
         refreshData();
+      }
+
+      // Ctrl + K: Open search modal (only when not in input fields)
+      if (event.ctrlKey && event.key === 'k') {
+        if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement) {
+          return;
+        }
+        event.preventDefault();
+        setSearchOpen(true);
+      }
+      
+      // ESC: Close search modal (works even when typing in search input)
+      if (event.key === 'Escape' && searchOpen) {
+        event.preventDefault();
+        setSearchOpen(false);
+        setSearchValue(''); // Clear search value when closing
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [searchOpen]);
 
   // Listen for real-time changes and show notifications
   React.useEffect(() => {
@@ -269,7 +289,7 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle }) => {
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-[#F6E9E9]/50" />
             <input
               type="text"
-              placeholder="Search projects..."
+              placeholder="Search projects... (Ctrl+K)"
                 className="pl-10 pr-4 py-2 w-48 lg:w-64 bg-[#272121]/50 border border-[#E16428]/20 rounded-lg text-[#F6E9E9] placeholder-[#F6E9E9]/50 focus:outline-none focus:border-[#E16428] transition-all duration-300 font-['Inter'] cursor-pointer"
                 onFocus={() => setSearchOpen(true)}
                 readOnly
@@ -380,7 +400,7 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle }) => {
                 type="text"
                 value={searchValue}
                 onChange={e => setSearchValue(e.target.value)}
-                placeholder="Search by client name, project ID, organization, or employee..."
+                placeholder="Search by client name, project ID, organization, or employee... (ESC to close)"
                 className="w-full px-6 py-4 rounded-xl bg-[#272121]/80 border border-[#E16428]/30 text-[#F6E9E9] placeholder-[#F6E9E9]/50 focus:outline-none focus:border-[#E16428] text-lg font-['Inter'] shadow-lg mb-2"
               />
               {/* Results Dropdown */}

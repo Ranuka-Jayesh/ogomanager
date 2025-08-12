@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useEffect } from 'react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import { X, Download, Share2, Zap } from 'lucide-react';
@@ -17,6 +17,18 @@ interface ProjectReceiptModalProps {
 
 export const ProjectReceiptModal: React.FC<ProjectReceiptModalProps> = ({ project, projectTypes, onClose }) => {
   const receiptRef = useRef<HTMLDivElement>(null);
+
+  // ESC key handler to close modal
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
 
   const getProjectTypeNames = (projectDescription: string) => {
     if (!projectDescription) return 'No types specified';

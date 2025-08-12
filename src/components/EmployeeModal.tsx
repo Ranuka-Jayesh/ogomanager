@@ -42,6 +42,18 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
     }
   }, [employee]);
 
+  // ESC key handler to close modal
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSave(formData);
@@ -194,9 +206,11 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
               </button>
               <button
                 type="submit"
-                className="px-6 py-3 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white rounded-lg hover:scale-105 transition-all duration-300 shadow-lg font-['Poppins']"
+                data-shortcut="save"
+                className="px-6 py-3 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white rounded-lg hover:scale-105 transition-all duration-300 shadow-lg font-['Poppins'] flex items-center gap-2"
               >
                 {employee ? 'Update' : 'Create'} Employee
+                <kbd className="px-2 py-1 bg-white/20 rounded text-xs font-mono">Alt + S</kbd>
               </button>
             </div>
           </form>

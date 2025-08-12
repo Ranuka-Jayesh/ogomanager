@@ -131,6 +131,42 @@ export const EmployeeManagement: React.FC<EmployeeManagementProps> = () => {
     setDeletingEmployee(null);
   };
 
+  // Keyboard shortcuts handler
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Prevent shortcuts when typing in input fields
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) {
+        return;
+      }
+      // Alt + A: Open add employee form
+      if (e.altKey && e.key === 'a') {
+        e.preventDefault();
+        handleAdd();
+      }
+      // Alt + S: Save/Update form (only when modal is open)
+      if (e.altKey && e.key === 's' && isModalOpen) {
+        e.preventDefault();
+        const saveButton = document.querySelector('[data-shortcut="save"]') as HTMLButtonElement;
+        if (saveButton) {
+          saveButton.click();
+        }
+      }
+      // Escape: Close modals
+      if (e.key === 'Escape') {
+        if (isModalOpen) {
+          handleModalClose();
+        }
+        if (confirmDeleteId) {
+          setConfirmDeleteId(null);
+          setDeletingEmployee(null);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isModalOpen, confirmDeleteId]);
+
   return (
     <div className="space-y-4 sm:space-y-6 animate-fadeIn">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
@@ -139,11 +175,16 @@ export const EmployeeManagement: React.FC<EmployeeManagementProps> = () => {
         </h1>
         <button
           onClick={handleAdd}
-          className="flex items-center space-x-2 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white px-4 sm:px-6 py-2 sm:py-3 rounded-lg hover:scale-105 transition-all duration-300 shadow-lg font-['Poppins']"
+          className="flex items-center space-x-2 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white px-4 sm:px-6 py-2 sm:py-3 rounded-lg hover:scale-105 transition-all duration-300 shadow-lg font-['Poppins'] group relative"
+          aria-label="Add Employee (Alt+A)"
+          title="Add New Employee (Alt+A)"
         >
           <Plus className="w-4 h-4 sm:w-5 sm:h-5" />
           <span className="hidden sm:inline">Add Employee</span>
           <span className="sm:hidden">Add</span>
+          <div className="absolute -top-1 -right-1 bg-[#E16428] text-white text-xs px-1.5 py-0.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-300 font-mono">
+            A
+          </div>
         </button>
       </div>
 

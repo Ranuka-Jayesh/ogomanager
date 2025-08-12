@@ -57,6 +57,24 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
     }
   }, [employees]);
 
+  // ESC key handler to close modals
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (confirmDeleteId) {
+          setConfirmDeleteId(null);
+          setDeletingProject(null);
+        }
+        if (receiptProject) {
+          setReceiptProject(null);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [confirmDeleteId, receiptProject]);
+
   const getEmployeeName = (employeeId: string) => {
     if (!employeeId) return 'Unassigned';
     

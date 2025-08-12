@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useImperativeHandle, forwardRef, useRef } from 'react';
 import { X } from 'lucide-react';
 import { Project, Employee } from '../types';
 import { GlassCard } from './GlassCard';
@@ -14,13 +14,17 @@ interface ProjectModalProps {
   nextProjectId?: string;
 }
 
-export const ProjectModal: React.FC<ProjectModalProps> = ({
+export interface ProjectModalRef {
+  submit: () => void;
+}
+
+export const ProjectModal = forwardRef<ProjectModalRef, ProjectModalProps>(({
   project,
   employees: initialEmployees,
   onClose,
   onSave,
   nextProjectId,
-}) => {
+}, ref) => {
   const [projectTypes, setProjectTypes] = useState<{ id: string; name: string }[]>([]);
   const [employees, setEmployees] = useState<Employee[]>(initialEmployees);
   const [loading, setLoading] = useState(true);
@@ -41,6 +45,28 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
     employees.find(e => e.id === formData.assignedTo) || null
   );
   const [projectIdError, setProjectIdError] = useState<string | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+
+  // Expose submit function to parent component
+  useImperativeHandle(ref, () => ({
+    submit: () => {
+      if (formRef.current) {
+        formRef.current.requestSubmit();
+      }
+    }
+  }));
+
+  // ESC key handler to close modal
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
 
   useEffect(() => {
     async function fetchData() {
@@ -174,7 +200,7 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
   ];
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-xl flex items-center justify-center p-4 z-50" style={{ top: '-10%' }}>
       <GlassCard className="w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <div className="p-6">
           <div className="flex items-center justify-between mb-6">
@@ -189,7 +215,7 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
             </button>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-4" ref={formRef}>
             <div>
               <label className="block text-[#F6E9E9] text-sm font-medium mb-2 font-['Inter']">
                 Project ID <span className="text-[#E16428]">*</span>
@@ -419,9 +445,11 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
               </button>
               <button
                 type="submit"
-                className="px-6 py-3 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white rounded-lg hover:scale-105 transition-all duration-300 shadow-lg font-['Poppins']"
+                data-shortcut="save"
+                className="px-6 py-3 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white rounded-lg hover:scale-105 transition-all duration-300 shadow-lg font-['Poppins'] flex items-center gap-2"
               >
                 {project ? 'Update' : 'Create'} Project
+                <kbd className="px-2 py-1 bg-white/20 rounded text-xs font-mono">Alt + S</kbd>
               </button>
             </div>
           </form>
@@ -429,4 +457,4 @@ export const ProjectModal: React.FC<ProjectModalProps> = ({
       </GlassCard>
     </div>
   );
-};
+});

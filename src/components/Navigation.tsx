@@ -1,5 +1,5 @@
-import React from 'react';
-import { Home, FolderOpen, Users, BarChart3, X, ChevronLeft, ChevronRight, Settings as SettingsIcon, LogOut } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Home, FolderOpen, Users, BarChart3, X, ChevronLeft, ChevronRight, Settings as SettingsIcon, LogOut, Keyboard } from 'lucide-react';
 
 interface NavigationProps {
   activeTab: string;
@@ -20,13 +20,55 @@ export const Navigation: React.FC<NavigationProps> = ({
   onSidebarToggle,
   onLogout
 }) => {
+  const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
+  
   const navItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: Home },
-    { id: 'projects', label: 'Projects', icon: FolderOpen },
-    { id: 'employees', label: 'Employees', icon: Users },
-    { id: 'analytics', label: 'Analytics', icon: BarChart3 },
-    { id: 'settings', label: 'Settings', icon: SettingsIcon },
+    { id: 'dashboard', label: 'Dashboard', icon: Home, shortcut: 'Alt + 1' },
+    { id: 'projects', label: 'Projects', icon: FolderOpen, shortcut: 'Alt + 2' },
+    { id: 'employees', label: 'Employees', icon: Users, shortcut: 'Alt + 3' },
+    { id: 'analytics', label: 'Analytics', icon: BarChart3, shortcut: 'Alt + 4' },
+    { id: 'settings', label: 'Settings', icon: SettingsIcon, shortcut: 'Alt + 5' },
   ];
+
+  // Keyboard shortcuts for navigation and help
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Prevent shortcuts when typing in input fields
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement) {
+        return;
+      }
+
+      // Alt + 1-5: Navigate to different tabs
+      if (event.altKey && /^[1-5]$/.test(event.key)) {
+        event.preventDefault();
+        const tabIndex = parseInt(event.key) - 1;
+        if (navItems[tabIndex]) {
+          setActiveTab(navItems[tabIndex].id);
+          // Close mobile menu if open
+          if (mobileOpen) {
+            onMobileClose();
+          }
+        }
+      }
+
+      // Ctrl + /: Show shortcuts help
+      if (event.ctrlKey && event.key === '/') {
+        event.preventDefault();
+        setShowShortcutsHelp(true);
+      }
+
+      // Escape: Close shortcuts help
+      if (event.key === 'Escape' && showShortcutsHelp) {
+        setShowShortcutsHelp(false);
+      }
+
+      // Alt + L: Logout (handled in App component)
+      // Removed from here to avoid conflicts
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [setActiveTab, mobileOpen, onMobileClose, showShortcutsHelp]);
 
   const handleItemClick = (itemId: string) => {
     setActiveTab(itemId);
@@ -61,14 +103,21 @@ export const Navigation: React.FC<NavigationProps> = ({
                     ? 'bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white shadow-lg scale-105'
                     : 'text-[#F6E9E9]/80 hover:bg-[#E16428]/10 hover:text-[#F6E9E9] hover:scale-102'
                 }`}
-                title={collapsed ? item.label : undefined}
+                title={collapsed ? `${item.label} (${item.shortcut})` : `${item.label} (${item.shortcut})`}
               >
                 <Icon className="w-5 h-5 flex-shrink-0" />
-                {!collapsed && <span className="font-medium">{item.label}</span>}
+                {!collapsed && (
+                  <div className="flex items-center justify-between w-full">
+                    <span className="font-medium">{item.label}</span>
+                    <kbd className="px-2 py-1 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                      {item.shortcut.split(' ')[1]}
+                    </kbd>
+                  </div>
+                )}
                 {/* Tooltip for collapsed state */}
                 {collapsed && (
                   <div className="absolute left-16 bg-[#272121] text-[#F6E9E9] px-2 py-1 rounded text-sm opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
-                    {item.label}
+                    {item.label} ({item.shortcut})
                   </div>
                 )}
               </button>
@@ -92,18 +141,35 @@ export const Navigation: React.FC<NavigationProps> = ({
           
           {/* Sidebar Footer */}
           <div className="p-4 border-t border-[#E16428]/10">
+            {/* Shortcuts Help Button */}
+            <button
+              onClick={() => setShowShortcutsHelp(true)}
+              className={`w-full flex items-center ${collapsed ? 'justify-center' : 'space-x-3'} px-4 py-3 mb-3 rounded-lg transition-all duration-300 font-['Poppins'] text-[#E16428] hover:bg-[#E16428]/10 hover:text-[#E16428]/80 hover:scale-102`}
+              title={collapsed ? 'Shortcuts (Ctrl+/)' : 'Keyboard Shortcuts (Ctrl+/)'}
+            >
+              <Keyboard className="w-5 h-5 flex-shrink-0" />
+              {!collapsed && <span className="font-medium">Shortcuts</span>}
+              {/* Tooltip for collapsed state */}
+              {collapsed && (
+                <div className="absolute left-16 bg-[#272121] text-[#E16428] px-2 py-1 rounded text-sm opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
+                  Shortcuts (Ctrl+/)
+                </div>
+              )}
+            </button>
+            
             {/* Logout Button */}
             <button
               onClick={onLogout}
+              data-shortcut="logout"
               className={`w-full flex items-center ${collapsed ? 'justify-center' : 'space-x-3'} px-4 py-3 mb-3 rounded-lg transition-all duration-300 font-['Poppins'] text-red-400 hover:bg-red-500/10 hover:text-red-300 hover:scale-102`}
-              title={collapsed ? 'Logout' : undefined}
+              title={collapsed ? 'Logout (Alt+L)' : 'Logout (Alt+L)'}
             >
               <LogOut className="w-5 h-5 flex-shrink-0" />
               {!collapsed && <span className="font-medium">Logout</span>}
               {/* Tooltip for collapsed state */}
               {collapsed && (
                 <div className="absolute left-16 bg-[#272121] text-red-400 px-2 py-1 rounded text-sm opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
-                  Logout
+                  Logout (Alt+L)
                 </div>
               )}
             </button>
@@ -154,14 +220,20 @@ export const Navigation: React.FC<NavigationProps> = ({
                 <button
                   key={item.id}
                   onClick={() => handleItemClick(item.id)}
-                  className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-all duration-300 font-['Poppins'] ${
+                  className={`w-full flex items-center justify-between px-4 py-3 rounded-lg transition-all duration-300 font-['Poppins'] ${
                     isActive
                       ? 'bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white shadow-lg'
                       : 'text-[#F6E9E9]/80 hover:bg-[#E16428]/10 hover:text-[#F6E9E9]'
                   }`}
+                  title={`${item.label} (${item.shortcut})`}
                 >
-                  <Icon className="w-5 h-5" />
-                  <span className="font-medium">{item.label}</span>
+                  <div className="flex items-center space-x-3">
+                    <Icon className="w-5 h-5" />
+                    <span className="font-medium">{item.label}</span>
+                  </div>
+                  <kbd className="px-2 py-1 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">
+                    {item.shortcut.split(' ')[1]}
+                  </kbd>
                 </button>
               );
             })}
@@ -170,13 +242,25 @@ export const Navigation: React.FC<NavigationProps> = ({
         
         {/* Mobile Sidebar Footer */}
         <div className="p-4 border-t border-[#E16428]/10 flex-shrink-0">
+          {/* Mobile Shortcuts Help Button */}
+          <button
+            onClick={() => setShowShortcutsHelp(true)}
+            className="w-full flex items-center space-x-3 px-4 py-3 mb-3 rounded-lg transition-all duration-300 font-['Poppins'] text-[#E16428] hover:bg-[#E16428]/10 hover:text-[#E16428]/80"
+            title="Keyboard Shortcuts (Ctrl+/)"
+          >
+            <Keyboard className="w-5 h-5" />
+            <span className="font-medium">Shortcuts</span>
+          </button>
+          
           {/* Mobile Logout Button */}
           <button
             onClick={() => {
               onLogout();
               onMobileClose();
             }}
+            data-shortcut="logout"
             className="w-full flex items-center space-x-3 px-4 py-3 mb-3 rounded-lg transition-all duration-300 font-['Poppins'] text-red-400 hover:bg-red-500/10 hover:text-red-300"
+            title="Logout (Alt+L)"
           >
             <LogOut className="w-5 h-5" />
             <span className="font-medium">Logout</span>
@@ -189,6 +273,82 @@ export const Navigation: React.FC<NavigationProps> = ({
           </p>
         </div>
       </nav>
+
+      {/* Keyboard Shortcuts Help Popup */}
+      {showShortcutsHelp && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-[999] animate-fadeIn">
+          <div className="bg-[#272121] rounded-xl p-4 max-w-md w-full mx-4 border border-[#E16428]/20 shadow-2xl animate-scaleIn">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Keyboard className="w-5 h-5 text-[#E16428]" />
+                <h3 className="text-lg font-bold text-[#F6E9E9] font-['Inter']">
+                  Quick Shortcuts
+                </h3>
+              </div>
+              <button
+                onClick={() => setShowShortcutsHelp(false)}
+                className="p-1.5 hover:bg-[#363333] rounded-lg transition-all duration-200"
+                title="Close (Esc)"
+              >
+                <X className="w-4 h-4 text-[#F6E9E9]" />
+              </button>
+            </div>
+
+            {/* Compact Shortcuts List */}
+            <div className="space-y-2 mb-4">
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div className="flex items-center justify-between p-2 bg-[#363333]/50 rounded-lg">
+                  <span className="text-[#F6E9E9]">Dashboard</span>
+                  <kbd className="px-1.5 py-0.5 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">Alt+1</kbd>
+                </div>
+                <div className="flex items-center justify-between p-2 bg-[#363333]/50 rounded-lg">
+                  <span className="text-[#F6E9E9]">Projects</span>
+                  <kbd className="px-1.5 py-0.5 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">Alt+2</kbd>
+                </div>
+                <div className="flex items-center justify-between p-2 bg-[#363333]/50 rounded-lg">
+                  <span className="text-[#F6E9E9]">Employees</span>
+                  <kbd className="px-1.5 py-0.5 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">Alt+3</kbd>
+                </div>
+                <div className="flex items-center justify-between p-2 bg-[#363333]/50 rounded-lg">
+                  <span className="text-[#F6E9E9]">Analytics</span>
+                  <kbd className="px-1.5 py-0.5 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">Alt+4</kbd>
+                </div>
+                <div className="flex items-center justify-between p-2 bg-[#363333]/50 rounded-lg">
+                  <span className="text-[#F6E9E9]">Settings</span>
+                  <kbd className="px-1.5 py-0.5 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">Alt+5</kbd>
+                </div>
+                <div className="flex items-center justify-between p-2 bg-[#363333]/50 rounded-lg">
+                  <span className="text-[#F6E9E9]">Add Project</span>
+                  <kbd className="px-1.5 py-0.5 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">Alt+A</kbd>
+                </div>
+                <div className="flex items-center justify-between p-2 bg-[#363333]/50 rounded-lg">
+                  <span className="text-[#F6E9E9]">Search</span>
+                  <kbd className="px-1.5 py-0.5 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">Alt+K</kbd>
+                </div>
+                <div className="flex items-center justify-between p-2 bg-[#363333]/50 rounded-lg">
+                  <span className="text-[#F6E9E9]">Global Search</span>
+                  <kbd className="px-1.5 py-0.5 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">Ctrl+K</kbd>
+                </div>
+                <div className="flex items-center justify-between p-2 bg-[#363333]/50 rounded-lg">
+                  <span className="text-[#F6E9E9]">Logout</span>
+                  <kbd className="px-1.5 py-0.5 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">Alt+L</kbd>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="text-center pt-2 border-t border-[#E16428]/20">
+              <button
+                onClick={() => setShowShortcutsHelp(false)}
+                className="px-4 py-2 bg-[#E16428] text-white rounded-lg hover:bg-[#E16428]/80 transition-all duration-300 text-sm font-medium"
+              >
+                Got it! (Esc)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 };

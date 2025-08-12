@@ -27,7 +27,59 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
   const [receiptProject, setReceiptProject] = useState<Project | null>(null);
   const [projectTypes, setProjectTypes] = useState<{ id: string; name: string }[]>([]);
   const [showScrollTop, setShowScrollTop] = useState(false);
+
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Keyboard shortcuts handler
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Prevent shortcuts when typing in input fields
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) {
+        return;
+      }
+
+      // Alt + A: Open add project form
+      if (e.altKey && e.key === 'a') {
+        e.preventDefault();
+        handleAdd();
+      }
+
+      // Alt + S: Save/Update form (only when modal is open)
+      if (e.altKey && e.key === 's' && isModalOpen) {
+        e.preventDefault();
+        // This will be handled by the ProjectModal component
+        const saveButton = document.querySelector('[data-shortcut="save"]') as HTMLButtonElement;
+        if (saveButton) {
+          saveButton.click();
+        }
+      }
+
+      // Alt + K: Focus search bar
+      if (e.altKey && e.key === 'k') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      }
+
+
+
+      // Escape: Close modals
+      if (e.key === 'Escape') {
+        if (isModalOpen) {
+          handleModalClose();
+        }
+        if (receiptProject) {
+          setReceiptProject(null);
+        }
+        if (confirmDeleteId) {
+          setConfirmDeleteId(null);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isModalOpen, receiptProject, confirmDeleteId]);
 
   const handleScroll = () => {
     if (scrollContainerRef.current) {
@@ -228,13 +280,14 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
               </select>
             </div>
           </div>
-          {/* Search Bar */}
+                    {/* Search Bar */}
           <input
             type="text"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="Search by employee, client, or university..."
+            placeholder="Search by employee, client, or university... (Alt+K)"
             className="w-full sm:w-64 px-4 py-2 bg-[#272121]/70 border border-[#E16428]/30 rounded-lg text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200 mb-2 sm:mb-0 text-xs sm:text-sm"
+            ref={searchInputRef}
           />
           {/* Sorting Buttons */}
         <div className="flex items-center gap-2">
@@ -539,13 +592,19 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
         </button>
       )}
 
+
+
       <button
         onClick={handleAdd}
-        className="fixed bottom-6 right-6 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white w-12 h-12 rounded-full flex items-center justify-center shadow-lg hover:scale-110 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#E16428] focus:ring-offset-[#272121] transition-all duration-300 z-40 animate-pulse"
-        aria-label="Add Project"
-        title="Add New Project"
+        className="fixed bottom-6 right-6 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white w-12 h-12 rounded-full flex items-center justify-center shadow-lg hover:scale-110 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#E16428] focus:ring-offset-[#272121] transition-all duration-300 z-40 animate-pulse group"
+        aria-label="Add Project (Alt+A)"
+        title="Add New Project (Alt+A)"
       >
         <Plus className="w-6 h-6" />
+        {/* Shortcut indicator */}
+        <div className="absolute -top-1 -right-1 bg-[#E16428] text-white text-xs px-1.5 py-0.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-300 font-mono">
+          A
+        </div>
       </button>
     </div>
   );

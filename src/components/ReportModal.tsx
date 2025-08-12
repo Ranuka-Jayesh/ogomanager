@@ -40,6 +40,22 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
   const [authError, setAuthError] = React.useState('');
   const [isAuthenticating, setIsAuthenticating] = React.useState(false);
 
+  // ESC key handler to close modals
+  React.useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (showAuthModal) {
+          setShowAuthModal(false);
+        } else if (open) {
+          onClose();
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showAuthModal, open, onClose]);
+
   // Enhanced analytics calculations
   const totalRevenue = projects.reduce((sum, p) => sum + p.price, 0);
   const totalEmployeePayments = projects.reduce((sum, p) => sum + p.paymentOfEmp, 0);

@@ -31,6 +31,18 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees }) => 
   const [loginError, setLoginError] = useState('');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
 
+  // ESC key handler to close login modal
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && showLoginModal) {
+        setShowLoginModal(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showLoginModal]);
+
   // Fetch project types on mount
   useEffect(() => {
     async function fetchProjectTypes() {

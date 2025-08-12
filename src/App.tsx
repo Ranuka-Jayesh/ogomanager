@@ -95,6 +95,16 @@ export function App() {
     setShowLogoutConfirm(true);
   };
 
+  const handleLogoutShortcut = () => {
+    if (showLogoutConfirm) {
+      // If logout popup is already open, confirm logout
+      handleLogoutConfirm();
+    } else {
+      // If logout popup is not open, show it
+      setShowLogoutConfirm(true);
+    }
+  };
+
   const handleLogoutConfirm = async () => {
     try {
       // Record logout event in the database
@@ -118,6 +128,30 @@ export function App() {
   const handleLogoutCancel = () => {
     setShowLogoutConfirm(false);
   };
+
+  // Keyboard shortcuts handler
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Prevent shortcuts when typing in input fields
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement) {
+        return;
+      }
+      
+      // ESC: Close logout confirmation modal
+      if (event.key === 'Escape' && showLogoutConfirm) {
+        setShowLogoutConfirm(false);
+      }
+      
+      // Alt + L: Logout (with smart behavior)
+      if (event.altKey && event.key === 'l') {
+        event.preventDefault();
+        handleLogoutShortcut();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showLogoutConfirm]);
 
   const handleLoginSuccess = (email: string) => {
     createSession(email);
