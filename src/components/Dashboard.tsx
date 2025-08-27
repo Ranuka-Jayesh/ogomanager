@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { DollarSign, Clock, CheckCircle, Users } from 'lucide-react';
 import { Project, Employee } from '../types';
 import { GlassCard } from './GlassCard';
@@ -8,14 +8,17 @@ import { supabase } from '../supabaseClient';
 interface DashboardProps {
   projects: Project[];
   employees: Employee[];
+  onRefresh?: () => void;
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ projects, employees }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRefresh }) => {
   useSupabaseConnection();
   const now = new Date();
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth());
   const [selectedYear, setSelectedYear] = useState(now.getFullYear());
   const [projectTypes, setProjectTypes] = React.useState<{ id: string; name: string }[]>([]);
+  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Filter projects by selected month and year
   const filteredProjects = projects.filter(project => {
@@ -44,6 +47,45 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees }) => 
   const totalRevenue = filteredProjects.reduce((sum, project) => sum + project.price, 0);
   const completedProjects = filteredProjects.filter(p => p.status === 'Delivered').length;
   const runningProjects = filteredProjects.filter(p => p.status === 'Running').length;
+
+  // Auto-refresh functionality
+  const handleRefresh = useCallback(async () => {
+    if (onRefresh && !isRefreshing) {
+      setIsRefreshing(true);
+      try {
+        await onRefresh();
+        setLastRefresh(new Date());
+      } catch (error) {
+        console.error('Error refreshing dashboard data:', error);
+      } finally {
+        setIsRefreshing(false);
+      }
+    }
+  }, [onRefresh, isRefreshing]);
+
+  // Auto-refresh when component mounts or when navigating to dashboard
+  useEffect(() => {
+    handleRefresh();
+  }, []); // Only run on mount
+
+  // Refresh when window gains focus (user returns to the tab)
+  useEffect(() => {
+    const handleFocus = () => {
+      handleRefresh();
+    };
+
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [handleRefresh]);
+
+  // Periodic refresh every 30 seconds when dashboard is active
+  useEffect(() => {
+    const interval = setInterval(() => {
+      handleRefresh();
+    }, 30000); // 30 seconds
+
+    return () => clearInterval(interval);
+  }, [handleRefresh]);
 
   React.useEffect(() => {
     async function fetchTypes() {
@@ -140,7 +182,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees }) => 
         </div>
         <div className="order-1 sm:order-2 w-full sm:w-auto">
           <span className="text-sm text-[#F6E9E9]/60 font-['Inter'] block text-left sm:text-right">
-            Last update: {now.toLocaleDateString()} {now.toLocaleTimeString()}
+            Last update: {lastRefresh.toLocaleTimeString()}
+            {isRefreshing && <span className="ml-2 text-[#E16428] animate-pulse">Refreshing...</span>}
           </span>
         </div>
       </div>

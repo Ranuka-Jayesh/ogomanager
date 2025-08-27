@@ -6,6 +6,7 @@ import { Analytics } from "./components/Analytics";
 import { ProjectManagement } from "./components/ProjectManagement";
 import { EmployeeManagement } from "./components/EmployeeManagement";
 import { Settings } from "./components/Settings";
+import Calendar from "./components/Calendar";
 import { LoginPage } from "./components/LoginPage";
 import { useProjects } from "./hooks/useProjects";
 import { useEmployees } from "./hooks/useEmployees";
@@ -29,8 +30,8 @@ export function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [minLoadingDone, setMinLoadingDone] = useState(false);
 
-  const { projects } = useProjects();
-  const { employees } = useEmployees();
+  const { projects, refetch: refetchProjects } = useProjects();
+  const { employees, refetch: refetchEmployees } = useEmployees();
 
   // Check for existing session on app startup
   useEffect(() => {
@@ -162,17 +163,28 @@ export function App() {
   const renderPage = () => {
     switch (activeTab) {
       case "dashboard":
-        return <Dashboard projects={projects} employees={employees} />;
+        return <Dashboard projects={projects} employees={employees} onRefresh={() => {
+          refetchProjects();
+          refetchEmployees();
+        }} />;
       case "analytics":
-        return <Analytics projects={projects} employees={employees} />;
+        return <Analytics projects={projects} employees={employees} onRefresh={() => {
+          refetchProjects();
+          refetchEmployees();
+        }} />;
       case "projects":
         return <ProjectManagement employees={employees} />;
       case "employees":
         return <EmployeeManagement />;
+      case "calendar":
+        return <Calendar projects={projects} onRefresh={refetchProjects} />;
       case "settings":
         return <Settings />;
       default:
-        return <Dashboard projects={projects} employees={employees} />;
+        return <Dashboard projects={projects} employees={employees} onRefresh={() => {
+          refetchProjects();
+          refetchEmployees();
+        }} />;
     }
   };
 

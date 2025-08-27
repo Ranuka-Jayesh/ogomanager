@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Home, FolderOpen, Users, BarChart3, X, ChevronLeft, ChevronRight, Settings as SettingsIcon, LogOut, Keyboard } from 'lucide-react';
+import { LayoutDashboard, FolderOpen, CalendarDays, Users, BarChart3, Settings, X, ChevronLeft, ChevronRight, LogOut, Keyboard } from 'lucide-react';
 
 interface NavigationProps {
   activeTab: string;
@@ -23,11 +23,12 @@ export const Navigation: React.FC<NavigationProps> = ({
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
   
   const navItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: Home, shortcut: 'Alt + 1' },
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, shortcut: 'Alt + 1' },
     { id: 'projects', label: 'Projects', icon: FolderOpen, shortcut: 'Alt + 2' },
-    { id: 'employees', label: 'Employees', icon: Users, shortcut: 'Alt + 3' },
-    { id: 'analytics', label: 'Analytics', icon: BarChart3, shortcut: 'Alt + 4' },
-    { id: 'settings', label: 'Settings', icon: SettingsIcon, shortcut: 'Alt + 5' },
+    { id: 'calendar', label: 'Calendar', icon: CalendarDays, shortcut: 'Alt + 3' },
+    { id: 'employees', label: 'Employees', icon: Users, shortcut: 'Alt + 4' },
+    { id: 'analytics', label: 'Analytics', icon: BarChart3, shortcut: 'Alt + 5' },
+    { id: 'settings', label: 'Settings', icon: Settings, shortcut: 'Alt + 6' },
   ];
 
   // Keyboard shortcuts for navigation and help
@@ -38,8 +39,8 @@ export const Navigation: React.FC<NavigationProps> = ({
         return;
       }
 
-      // Alt + 1-5: Navigate to different tabs
-      if (event.altKey && /^[1-5]$/.test(event.key)) {
+      // Alt + 1-6: Navigate to different tabs
+      if (event.altKey && /^[1-6]$/.test(event.key)) {
         event.preventDefault();
         const tabIndex = parseInt(event.key) - 1;
         if (navItems[tabIndex]) {
@@ -175,7 +176,7 @@ export const Navigation: React.FC<NavigationProps> = ({
             </button>
             <div className={`transition-all duration-300 ${collapsed ? 'opacity-0 h-0 overflow-hidden' : 'opacity-100'}`}>
               <p className="text-xs text-center text-[#F6E9E9]/50 font-['Poppins']">
-                ogo manager V.04
+                ogo manager V.06
               </p>
               <p className="text-xs text-center text-[#F6E9E9]/30 font-['Poppins'] mt-1">
                 2025
@@ -220,7 +221,7 @@ export const Navigation: React.FC<NavigationProps> = ({
                 <button
                   key={item.id}
                   onClick={() => handleItemClick(item.id)}
-                  className={`w-full flex items-center justify-between px-4 py-3 rounded-lg transition-all duration-300 font-['Poppins'] ${
+                  className={`w-full flex items-center px-4 py-3 rounded-lg transition-all duration-300 font-['Poppins'] ${
                     isActive
                       ? 'bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white shadow-lg'
                       : 'text-[#F6E9E9]/80 hover:bg-[#E16428]/10 hover:text-[#F6E9E9]'
@@ -231,9 +232,6 @@ export const Navigation: React.FC<NavigationProps> = ({
                     <Icon className="w-5 h-5" />
                     <span className="font-medium">{item.label}</span>
                   </div>
-                  <kbd className="px-2 py-1 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">
-                    {item.shortcut.split(' ')[1]}
-                  </kbd>
                 </button>
               );
             })}
@@ -242,16 +240,6 @@ export const Navigation: React.FC<NavigationProps> = ({
         
         {/* Mobile Sidebar Footer */}
         <div className="p-4 border-t border-[#E16428]/10 flex-shrink-0">
-          {/* Mobile Shortcuts Help Button */}
-          <button
-            onClick={() => setShowShortcutsHelp(true)}
-            className="w-full flex items-center space-x-3 px-4 py-3 mb-3 rounded-lg transition-all duration-300 font-['Poppins'] text-[#E16428] hover:bg-[#E16428]/10 hover:text-[#E16428]/80"
-            title="Keyboard Shortcuts (Ctrl+/)"
-          >
-            <Keyboard className="w-5 h-5" />
-            <span className="font-medium">Shortcuts</span>
-          </button>
-          
           {/* Mobile Logout Button */}
           <button
             onClick={() => {
@@ -266,7 +254,7 @@ export const Navigation: React.FC<NavigationProps> = ({
             <span className="font-medium">Logout</span>
           </button>
           <p className="text-xs text-center text-[#F6E9E9]/50 font-['Poppins']">
-            ogo manager V.04
+            ogo manager V.06
           </p>
           <p className="text-xs text-center text-[#F6E9E9]/30 font-['Poppins'] mt-1">
             2025
@@ -315,8 +303,12 @@ export const Navigation: React.FC<NavigationProps> = ({
                   <kbd className="px-1.5 py-0.5 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">Alt+4</kbd>
                 </div>
                 <div className="flex items-center justify-between p-2 bg-[#363333]/50 rounded-lg">
-                  <span className="text-[#F6E9E9]">Settings</span>
+                  <span className="text-[#F6E9E9]">Calendar</span>
                   <kbd className="px-1.5 py-0.5 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">Alt+5</kbd>
+                </div>
+                <div className="flex items-center justify-between p-2 bg-[#363333]/50 rounded-lg">
+                  <span className="text-[#F6E9E9]">Settings</span>
+                  <kbd className="px-1.5 py-0.5 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">Alt+6</kbd>
                 </div>
                 <div className="flex items-center justify-between p-2 bg-[#363333]/50 rounded-lg">
                   <span className="text-[#F6E9E9]">Add Project</span>

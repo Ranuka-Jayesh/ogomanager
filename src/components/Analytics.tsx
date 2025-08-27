@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { TrendingUp, DollarSign, Users, Calendar, Clock, Download, Lock, X } from 'lucide-react';
 import { Project, Employee } from '../types';
 import { GlassCard } from './GlassCard';
@@ -8,6 +8,7 @@ import { supabase } from '../supabaseClient';
 interface AnalyticsProps {
   projects: Project[];
   employees: Employee[];
+  onRefresh?: () => void;
 }
 
 interface MonthlyData {
@@ -18,7 +19,7 @@ interface MonthlyData {
   employeePayments: number;
 }
 
-export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees }) => {
+export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRefresh }) => {
   // Month/year filter state
   const [selectedMonth, setSelectedMonth] = useState<'all' | number>(new Date().getMonth());
   const [selectedYear, setSelectedYear] = useState<'all' | number>(new Date().getFullYear());
@@ -30,6 +31,49 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees }) => 
   const [adminPassword, setAdminPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
+  
+  // Auto-refresh state
+  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // Auto-refresh functionality
+  const handleRefresh = useCallback(async () => {
+    if (onRefresh && !isRefreshing) {
+      setIsRefreshing(true);
+      try {
+        await onRefresh();
+        setLastRefresh(new Date());
+      } catch (error) {
+        console.error('Error refreshing analytics data:', error);
+      } finally {
+        setIsRefreshing(false);
+      }
+    }
+  }, [onRefresh, isRefreshing]);
+
+  // Auto-refresh when component mounts or when navigating to analytics
+  useEffect(() => {
+    handleRefresh();
+  }, []); // Only run on mount
+
+  // Refresh when window gains focus (user returns to the tab)
+  useEffect(() => {
+    const handleFocus = () => {
+      handleRefresh();
+    };
+
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [handleRefresh]);
+
+  // Periodic refresh every 30 seconds when analytics is active
+  useEffect(() => {
+    const interval = setInterval(() => {
+      handleRefresh();
+    }, 30000); // 30 seconds
+
+    return () => clearInterval(interval);
+  }, [handleRefresh]);
 
   // ESC key handler to close login modal
   useEffect(() => {
@@ -361,7 +405,8 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees }) => 
           Analytics & Reports
         </h1>
         <div className="text-xs sm:text-sm text-[#F6E9E9]/70 font-['Inter']">
-          Data as of {new Date().toLocaleDateString()}
+          Last update: {lastRefresh.toLocaleTimeString()}
+          {isRefreshing && <span className="ml-2 text-[#E16428] animate-pulse">Refreshing...</span>}
         </div>
       </div>
 
