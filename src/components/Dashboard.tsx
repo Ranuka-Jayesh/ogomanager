@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { DollarSign, Clock, CheckCircle, Users } from 'lucide-react';
+import { DollarSign, Clock, CheckCircle, AlertCircle } from 'lucide-react';
 import { Project, Employee } from '../types';
 import { GlassCard } from './GlassCard';
 import { useSupabaseConnection } from '../hooks/useSupabaseConnection';
@@ -45,8 +45,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
   }
 
   const totalRevenue = filteredProjects.reduce((sum, project) => sum + project.price, 0);
-  const completedProjects = filteredProjects.filter(p => p.status === 'Delivered').length;
+  const completedProjects = filteredProjects.filter(p => p.status === 'Delivered' || p.status === 'Pending Payment').length;
   const runningProjects = filteredProjects.filter(p => p.status === 'Running').length;
+  const totalPendingPayments = filteredProjects
+    .filter(p => p.status === 'Pending Payment' || p.status === 'Pending')
+    .reduce((sum, project) => {
+      // Calculate balance if not set or if it's a Pending project
+      const balance = project.balance !== undefined && project.balance !== null 
+        ? project.balance 
+        : project.price - project.advance;
+      return sum + balance;
+    }, 0);
 
   // Auto-refresh functionality
   const handleRefresh = useCallback(async () => {
@@ -128,9 +137,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
       bgColor: 'bg-green-500/10',
     },
     {
-      title: 'Total Employees',
-      value: employees.length,
-      icon: Users,
+      title: 'Total Pending Payments',
+      value: `LKR ${totalPendingPayments.toLocaleString()}`,
+      icon: AlertCircle,
       color: 'from-purple-400 to-purple-600',
       bgColor: 'bg-purple-500/10',
     },
@@ -292,7 +301,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
           <div className="space-y-3">
             {employees.slice(0, 5).map((employee) => {
               const filteredEmployeeProjects = filteredProjects.filter(p => p.assignedTo === employee.id);
-              const completedCount = filteredEmployeeProjects.filter(p => p.status === 'Delivered').length;
+              const completedCount = filteredEmployeeProjects.filter(p => p.status === 'Delivered' || p.status === 'Pending Payment').length;
               
               return (
                 <div

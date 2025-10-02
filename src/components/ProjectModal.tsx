@@ -36,6 +36,7 @@ export const ProjectModal = forwardRef<ProjectModalRef, ProjectModalProps>(({
     deadlineDate: '',
     price: 0,
     advance: 0,
+    balance: 0,
     assignedTo: '',
     paymentOfEmp: 0,
     status: 'Pending' as Project['status'],
@@ -127,6 +128,7 @@ export const ProjectModal = forwardRef<ProjectModalRef, ProjectModalProps>(({
         deadlineDate: project.deadlineDate,
         price: project.price,
         advance: project.advance,
+        balance: project.balance || (project.price - project.advance),
         assignedTo: project.assignedTo,
         paymentOfEmp: project.paymentOfEmp,
         status: project.status,
@@ -156,6 +158,14 @@ export const ProjectModal = forwardRef<ProjectModalRef, ProjectModalProps>(({
       assignedTo: selectedEmployee ? selectedEmployee.id : ''
     }));
   }, [selectedEmployee]);
+
+  // Automatically calculate balance when price or advance changes
+  useEffect(() => {
+    setFormData(prev => ({
+      ...prev,
+      balance: prev.price - prev.advance
+    }));
+  }, [formData.price, formData.advance]);
 
   const handleTypeChange = (id: string) => {
     setFormData(prev => ({
@@ -194,6 +204,7 @@ export const ProjectModal = forwardRef<ProjectModalRef, ProjectModalProps>(({
   const statuses: Project['status'][] = [
     'Running',
     'Pending',
+    'Pending Payment',
     'Delivered',
     'Correction',
     'Rejected',
@@ -376,6 +387,7 @@ export const ProjectModal = forwardRef<ProjectModalRef, ProjectModalProps>(({
                   min="0"
                 />
               </div>
+
 
               <div>
                 <label className="block text-[#F6E9E9] text-sm font-medium mb-2 font-['Inter']">

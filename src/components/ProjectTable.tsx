@@ -4,6 +4,7 @@ import { Project, Employee } from '../types';
 import { GlassCard } from './GlassCard';
 import { supabase } from '../supabaseClient';
 import { ProjectReceiptModal } from './ProjectReceiptModal';
+import { PaymentConfirmationModal } from './PaymentConfirmationModal';
 
 interface ProjectTableProps {
   projects: Project[];
@@ -29,6 +30,7 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deletingProject, setDeletingProject] = useState<Project | null>(null);
   const [receiptProject, setReceiptProject] = useState<Project | null>(null);
+  const [paymentConfirmationProject, setPaymentConfirmationProject] = useState<Project | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const recordsPerPage = 7;
   const totalPages = Math.ceil(projects.length / recordsPerPage);
@@ -68,12 +70,15 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
         if (receiptProject) {
           setReceiptProject(null);
         }
+        if (paymentConfirmationProject) {
+          setPaymentConfirmationProject(null);
+        }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [confirmDeleteId, receiptProject]);
+  }, [confirmDeleteId, receiptProject, paymentConfirmationProject]);
 
   const getEmployeeName = (employeeId: string) => {
     if (!employeeId) return 'Unassigned';
@@ -131,13 +136,52 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
   const statuses: Project['status'][] = [
     'Running',
     'Pending',
+    'Pending Payment',
     'Delivered',
     'Correction',
     'Rejected',
   ];
 
   const handleStatusChange = (projectId: string, newStatus: Project['status']) => {
+    const project = projects.find(p => p.id === projectId);
+    if (!project) return;
+
+    // Check if changing to "Delivered" and there's a remaining balance
+    if (newStatus === 'Delivered') {
+      const remainingBalance = project.price - project.advance;
+      if (remainingBalance > 0) {
+        setPaymentConfirmationProject(project);
+        return;
+      }
+    }
+
     onUpdateStatus(projectId, { status: newStatus });
+  };
+
+  const handlePaymentConfirmation = (customAmount?: number) => {
+    if (!paymentConfirmationProject) return;
+
+    if (customAmount !== undefined) {
+      // Partial payment
+      const newAdvance = paymentConfirmationProject.advance + customAmount;
+      const newBalance = paymentConfirmationProject.price - newAdvance;
+      const finalStatus = newBalance > 0 ? 'Pending Payment' : 'Delivered';
+      
+      onUpdateStatus(paymentConfirmationProject.id, {
+        status: finalStatus,
+        advance: newAdvance,
+        balance: newBalance
+      });
+    } else {
+      // Full payment
+      onUpdateStatus(paymentConfirmationProject.id, {
+        status: 'Delivered',
+        advance: paymentConfirmationProject.price,
+        balance: 0
+      });
+    }
+
+    setPaymentConfirmationProject(null);
   };
 
   const handleDeleteClick = (project: Project) => {
@@ -509,6 +553,15 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
           project={receiptProject}
           projectTypes={projectTypes}
           onClose={() => setReceiptProject(null)}
+        />
+      )}
+
+      {paymentConfirmationProject && (
+        <PaymentConfirmationModal
+          project={paymentConfirmationProject}
+          remainingBalance={paymentConfirmationProject.price - paymentConfirmationProject.advance}
+          onConfirm={handlePaymentConfirmation}
+          onCancel={() => setPaymentConfirmationProject(null)}
         />
       )}
     </>

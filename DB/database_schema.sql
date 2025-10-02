@@ -36,7 +36,8 @@
         advance DECIMAL(10,2) DEFAULT 0,
         assigned_to UUID REFERENCES employees(id),
         payment_of_emp DECIMAL(10,2) DEFAULT 0,
-        status VARCHAR(20) DEFAULT 'Pending' CHECK (status IN ('Running', 'Pending', 'Delivered', 'Correction', 'Rejected')),
+        balance DECIMAL(10,2) DEFAULT 0,
+        status VARCHAR(20) DEFAULT 'Pending' CHECK (status IN ('Running', 'Pending', 'Pending Payment', 'Delivered', 'Correction', 'Rejected')),
         fast_deliver BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()

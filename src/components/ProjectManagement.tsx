@@ -5,6 +5,7 @@ import { ProjectModal } from './ProjectModal';
 import { ProjectTable } from './ProjectTable';
 import { useProjects } from '../hooks/useProjects';
 import { ProjectReceiptModal } from './ProjectReceiptModal';
+import { PaymentConfirmationModal } from './PaymentConfirmationModal';
 import { supabase } from '../supabaseClient';
 
 interface ProjectManagementProps {
@@ -25,6 +26,7 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
   const [sortBy, setSortBy] = useState<'deadline-asc' | 'deadline-desc' | 'projectId-asc' | 'projectId-desc'>('deadline-asc');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [receiptProject, setReceiptProject] = useState<Project | null>(null);
+  const [paymentConfirmationProject, setPaymentConfirmationProject] = useState<Project | null>(null);
   const [projectTypes, setProjectTypes] = useState<{ id: string; name: string }[]>([]);
   const [showScrollTop, setShowScrollTop] = useState(false);
 
@@ -74,12 +76,15 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
         if (confirmDeleteId) {
           setConfirmDeleteId(null);
         }
+        if (paymentConfirmationProject) {
+          setPaymentConfirmationProject(null);
+        }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isModalOpen, receiptProject, confirmDeleteId]);
+  }, [isModalOpen, receiptProject, confirmDeleteId, paymentConfirmationProject]);
 
   const handleScroll = () => {
     if (scrollContainerRef.current) {
@@ -208,6 +213,54 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
     await deleteProject(id);
   };
 
+  const handleStatusChange = (projectId: string, newStatus: Project['status']) => {
+    // If changing to "Delivered", check for remaining balance
+    if (newStatus === 'Delivered') {
+      const project = projects.find(p => p.id === projectId);
+      if (project) {
+        const remainingBalance = project.price - project.advance;
+        
+        // If there's a remaining balance, show payment confirmation
+        if (remainingBalance > 0) {
+          setPaymentConfirmationProject(project);
+          return; // Don't update status yet, wait for confirmation
+        }
+      }
+    }
+    
+    // For all other statuses or if no remaining balance, update directly
+    updateProject(projectId, { status: newStatus });
+  };
+
+  const handlePaymentConfirmation = async (customAmount?: number) => {
+    if (paymentConfirmationProject) {
+      if (customAmount !== undefined) {
+        // Partial payment - add custom amount to existing advance
+        const newAdvance = paymentConfirmationProject.advance + customAmount;
+        const newBalance = paymentConfirmationProject.price - newAdvance;
+        // If there's still a balance remaining, set status to "Pending Payment"
+        const finalStatus = newBalance > 0 ? 'Pending Payment' : 'Delivered';
+        await updateProject(paymentConfirmationProject.id, { 
+          status: finalStatus,
+          advance: newAdvance,
+          balance: newBalance
+        });
+      } else {
+        // Full payment - advance becomes equal to price, balance becomes 0
+        await updateProject(paymentConfirmationProject.id, { 
+          status: 'Delivered',
+          advance: paymentConfirmationProject.price,
+          balance: 0
+        });
+      }
+      setPaymentConfirmationProject(null);
+    }
+  };
+
+  const handlePaymentCancel = () => {
+    setPaymentConfirmationProject(null);
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
@@ -313,7 +366,7 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
 
       {/* Filter Buttons */}
       <div className="flex flex-wrap gap-2 sm:gap-4">
-        {['all', 'Running', 'Pending', 'Delivered', 'Correction', 'Rejected'].map((status) => (
+        {['all', 'Running', 'Pending', 'Pending Payment', 'Delivered', 'Correction', 'Rejected'].map((status) => (
           <button
             key={status}
             onClick={() => setFilter(status)}
@@ -349,6 +402,7 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
                 'Running': 'bg-blue-500/20 text-blue-300 border-blue-500/30',
                 'Delivered': 'bg-green-500/20 text-green-300 border-green-500/30',
                 'Pending': 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30',
+                'Pending Payment': 'bg-purple-500/20 text-purple-300 border-purple-500/30',
                 'Correction': 'bg-orange-500/20 text-orange-300 border-orange-500/30',
                 'Rejected': 'bg-red-500/20 text-red-300 border-red-500/30'
               };
@@ -494,10 +548,10 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
                     </div>
                     <select
                       value={project.status}
-                      onChange={(e) => updateProject(project.id, { status: e.target.value as Project['status'] })}
+                      onChange={(e) => handleStatusChange(project.id, e.target.value as Project['status'])}
                       className={`px-3 py-1.5 rounded-full text-xs font-medium border bg-transparent cursor-pointer transition-all duration-200 hover:scale-105 ${statusColors[project.status as keyof typeof statusColors] || 'bg-gray-500/20 text-gray-300 border-gray-500/30'}`}
                     >
-                      {['Running', 'Pending', 'Delivered', 'Correction', 'Rejected'].map((status) => (
+                      {['Running', 'Pending', 'Pending Payment', 'Delivered', 'Correction', 'Rejected'].map((status) => (
                         <option key={status} value={status} className="bg-[#272121] text-[#F6E9E9]">
                           {status}
                         </option>
@@ -578,6 +632,15 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
           onClose={handleModalClose}
           onSave={handleSave}
           nextProjectId={nextProjectId}
+        />
+      )}
+
+      {paymentConfirmationProject && (
+        <PaymentConfirmationModal
+          project={paymentConfirmationProject}
+          remainingBalance={paymentConfirmationProject.price - paymentConfirmationProject.advance}
+          onConfirm={handlePaymentConfirmation}
+          onCancel={handlePaymentCancel}
         />
       )}
 

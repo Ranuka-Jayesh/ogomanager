@@ -9,9 +9,10 @@ CREATE TABLE IF NOT EXISTS projects (
     deadline_date DATE NOT NULL,
     price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
     advance DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+    balance DECIMAL(10,2) NOT NULL DEFAULT 0.00,
     assigned_to UUID REFERENCES employees(id) ON DELETE SET NULL,
     payment_of_emp DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-    status VARCHAR(50) NOT NULL DEFAULT 'Pending' CHECK (status IN ('Running', 'Pending', 'Delivered', 'Correction', 'Rejected')),
+    status VARCHAR(50) NOT NULL DEFAULT 'Pending' CHECK (status IN ('Running', 'Pending', 'Pending Payment', 'Delivered', 'Correction', 'Rejected')),
     fast_deliver BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -38,6 +39,7 @@ COMMENT ON COLUMN projects.project_description IS 'Comma-separated list of proje
 COMMENT ON COLUMN projects.deadline_date IS 'Project deadline date';
 COMMENT ON COLUMN projects.price IS 'Total project price in LKR';
 COMMENT ON COLUMN projects.advance IS 'Advance payment amount in LKR';
+COMMENT ON COLUMN projects.balance IS 'Remaining balance after advance payment (price - advance)';
 COMMENT ON COLUMN projects.assigned_to IS 'Employee ID assigned to this project';
 COMMENT ON COLUMN projects.payment_of_emp IS 'Payment amount for the assigned employee in LKR';
 COMMENT ON COLUMN projects.status IS 'Current status of the project';

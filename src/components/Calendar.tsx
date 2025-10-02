@@ -45,6 +45,83 @@ export const Calendar: React.FC<CalendarProps> = ({ projects, onRefresh }) => {
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [isRefreshing, setIsRefreshing] = useState(false);
 
+  // Function to get status color
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'Running':
+        return 'text-blue-300';
+      case 'Delivered':
+        return 'text-green-300';
+      case 'Pending':
+        return 'text-yellow-300';
+      case 'Pending Payment':
+        return 'text-purple-300';
+      case 'Correction':
+        return 'text-orange-300';
+      case 'Rejected':
+        return 'text-red-300';
+      default:
+        return 'text-[#F6E9E9]/40';
+    }
+  };
+
+  // Function to get status background and border colors
+  const getStatusCardColors = (status: string) => {
+    switch (status) {
+      case 'Running':
+        return 'bg-blue-500/10 border-blue-500/30';
+      case 'Delivered':
+        return 'bg-green-500/10 border-green-500/30';
+      case 'Pending':
+        return 'bg-yellow-500/10 border-yellow-500/30';
+      case 'Pending Payment':
+        return 'bg-purple-500/10 border-purple-500/30';
+      case 'Correction':
+        return 'bg-orange-500/10 border-orange-500/30';
+      case 'Rejected':
+        return 'bg-red-500/10 border-red-500/30';
+      default:
+        return 'bg-gray-500/10 border-gray-500/30';
+    }
+  };
+
+  // Function to get status date color
+  const getStatusDateColor = (status: string) => {
+    switch (status) {
+      case 'Running':
+        return 'text-blue-300';
+      case 'Delivered':
+        return 'text-green-300';
+      case 'Pending':
+        return 'text-yellow-300';
+      case 'Pending Payment':
+        return 'text-purple-300';
+      case 'Correction':
+        return 'text-orange-300';
+      case 'Rejected':
+        return 'text-red-300';
+      default:
+        return 'text-[#F6E9E9]/40';
+    }
+  };
+
+  // Function to get delivered badge colors based on project statuses
+  const getDeliveredBadgeColors = (projects: Project[]) => {
+    const hasPendingPayment = projects.some(p => p.status === 'Pending Payment');
+    const hasDelivered = projects.some(p => p.status === 'Delivered');
+    
+    if (hasPendingPayment && hasDelivered) {
+      // Mixed statuses - use purple for "Pending Payment"
+      return 'bg-purple-500/15 text-purple-300 border-purple-500/30';
+    } else if (hasPendingPayment) {
+      // Only "Pending Payment" - use purple
+      return 'bg-purple-500/15 text-purple-300 border-purple-500/30';
+    } else {
+      // Only "Delivered" - use green
+      return 'bg-green-500/15 text-green-300 border-green-500/30';
+    }
+  };
+
   const todayKey = formatDateKey(new Date());
 
   const monthName = anchorDate.toLocaleString(undefined, { month: 'long', year: 'numeric' });
@@ -63,7 +140,7 @@ export const Calendar: React.FC<CalendarProps> = ({ projects, onRefresh }) => {
       deadline.setHours(0, 0, 0, 0);
       const key = formatDateKey(deadline);
 
-      const isDelivered = p.status === 'Delivered';
+      const isDelivered = p.status === 'Delivered' || p.status === 'Pending Payment';
       const isOverdue = !isDelivered && deadline < today;
       const isRunning = p.status === 'Running' && deadline >= today;
       const isPending = p.status === 'Pending' && deadline >= today;
@@ -101,21 +178,32 @@ export const Calendar: React.FC<CalendarProps> = ({ projects, onRefresh }) => {
     return eventsByDate[activeDateKey] || { running: [], pending: [], overdueRunning: [], overduePending: [], other: [] };
   }, [activeDateKey, eventsByDate]);
 
-  // Calculate the busiest date (most projects)
+  // Calculate the busiest date (most projects) for the current month
   const busyDate = useMemo(() => {
     let maxProjects = 0;
     let busiestDate = '';
     
+    // Get the current month and year from anchorDate
+    const currentMonth = anchorDate.getMonth();
+    const currentYear = anchorDate.getFullYear();
+    
     Object.entries(eventsByDate).forEach(([dateKey, events]) => {
-      const totalCount = events.running.length + events.pending.length + events.overdueRunning.length + events.overduePending.length + events.other.length;
-      if (totalCount > maxProjects) {
-        maxProjects = totalCount;
-        busiestDate = dateKey;
+      // Parse the dateKey to check if it's in the current month
+      const [year, month, day] = dateKey.split('-').map(Number);
+      const eventDate = new Date(year, month - 1, day); // month is 0-indexed in Date constructor
+      
+      // Only consider dates in the current month
+      if (eventDate.getMonth() === currentMonth && eventDate.getFullYear() === currentYear) {
+        const totalCount = events.running.length + events.pending.length + events.overdueRunning.length + events.overduePending.length + events.other.length;
+        if (totalCount > maxProjects) {
+          maxProjects = totalCount;
+          busiestDate = dateKey;
+        }
       }
     });
     
     return { date: busiestDate, count: maxProjects };
-  }, [eventsByDate]);
+  }, [eventsByDate, anchorDate]);
 
   // Auto-refresh functionality
   const handleRefresh = useCallback(async () => {
@@ -270,7 +358,7 @@ export const Calendar: React.FC<CalendarProps> = ({ projects, onRefresh }) => {
                           </div>
                         )}
                         {events.other.length > 0 && (
-                          <div className="text-[9px] sm:text-[10px] truncate px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                          <div className={`text-[9px] sm:text-[10px] truncate px-1.5 py-0.5 rounded ${getDeliveredBadgeColors(events.other)}`}>
                             {events.other.length} delivered
                           </div>
                         )}
@@ -287,14 +375,15 @@ export const Calendar: React.FC<CalendarProps> = ({ projects, onRefresh }) => {
             <div className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full bg-blue-500/70"></span> Overdue Pending</div>
             <div className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full bg-blue-400/70"></span> Pending</div>
             <div className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full bg-[#E16428]"></span> Running</div>
-            <div className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-400"></span> Delivered</div>
+            <div className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full bg-green-400"></span> Delivered</div>
+            <div className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full bg-purple-400"></span> Pending Payment</div>
           </div>
         </div>
 
         <div className="lg:col-span-1 space-y-3">
-          {/* Busy Date Statistics */}
+          {/* Most Busy Day Statistics */}
           <div className="bg-[#272121]/60 border border-[#E16428]/20 rounded-2xl p-3">
-            <h3 className="text-base font-semibold text-[#F6E9E9] mb-2">Busy Date</h3>
+            <h3 className="text-base font-semibold text-[#F6E9E9] mb-2">Most Busy Day</h3>
             {busyDate.count > 0 ? (
               <div className="space-y-2">
                 <div className="p-2 rounded-lg bg-[#E16428]/10 border border-[#E16428]/30">
@@ -319,7 +408,7 @@ export const Calendar: React.FC<CalendarProps> = ({ projects, onRefresh }) => {
             {activeProjects.length === 0 ? (
               <p className="text-[#F6E9E9]/50 text-xs">No running projects due today or overdue.</p>
             ) : (
-              <div className="space-y-1.5 max-h-48 overflow-auto pr-1">
+              <div className="space-y-1.5 h-[21rem] overflow-auto pr-1">
                 {activeProjects.map(p => {
                   const isOverdue = new Date(p.deadlineDate) < new Date();
                   
@@ -336,7 +425,7 @@ export const Calendar: React.FC<CalendarProps> = ({ projects, onRefresh }) => {
                         }`}>{new Date(p.deadlineDate).toLocaleDateString()}</span>
                       </div>
                       <div className="text-[11px] text-[#F6E9E9]/60 truncate">{p.clientName}</div>
-                      <div className="text-[10px] text-[#F6E9E9]/40">Status: {p.status}</div>
+                      <div className={`text-[10px] ${getStatusColor(p.status)}`}>Status: {p.status}</div>
                     </div>
                   );
                 })}
@@ -372,7 +461,7 @@ export const Calendar: React.FC<CalendarProps> = ({ projects, onRefresh }) => {
                           <span className="text-[10px] text-red-300">{new Date(p.deadlineDate).toLocaleDateString()}</span>
                         </div>
                         <div className="text-[11px] text-[#F6E9E9]/60 truncate">{p.clientName}</div>
-                        <div className="text-[10px] text-[#F6E9E9]/40">Status: {p.status}</div>
+                        <div className={`text-[10px] ${getStatusColor(p.status)}`}>Status: {p.status}</div>
                       </div>
                     ))}
                   </div>
@@ -391,7 +480,7 @@ export const Calendar: React.FC<CalendarProps> = ({ projects, onRefresh }) => {
                           <span className="text-[10px] text-blue-300">{new Date(p.deadlineDate).toLocaleDateString()}</span>
                         </div>
                         <div className="text-[11px] text-[#F6E9E9]/60 truncate">{p.clientName}</div>
-                        <div className="text-[10px] text-[#F6E9E9]/40">Status: {p.status}</div>
+                        <div className={`text-[10px] ${getStatusColor(p.status)}`}>Status: {p.status}</div>
                       </div>
                     ))}
                   </div>
@@ -410,7 +499,7 @@ export const Calendar: React.FC<CalendarProps> = ({ projects, onRefresh }) => {
                           <span className="text-[10px] text-blue-300">{new Date(p.deadlineDate).toLocaleDateString()}</span>
                         </div>
                         <div className="text-[11px] text-[#F6E9E9]/60 truncate">{p.clientName}</div>
-                        <div className="text-[10px] text-[#F6E9E9]/40">Status: {p.status}</div>
+                        <div className={`text-[10px] ${getStatusColor(p.status)}`}>Status: {p.status}</div>
                       </div>
                     ))}
                   </div>
@@ -429,7 +518,7 @@ export const Calendar: React.FC<CalendarProps> = ({ projects, onRefresh }) => {
                           <span className="text-[10px] text-[#E16428]">{new Date(p.deadlineDate).toLocaleDateString()}</span>
                         </div>
                         <div className="text-[11px] text-[#F6E9E9]/60 truncate">{p.clientName}</div>
-                        <div className="text-[10px] text-[#F6E9E9]/40">Status: {p.status}</div>
+                        <div className={`text-[10px] ${getStatusColor(p.status)}`}>Status: {p.status}</div>
                       </div>
                     ))}
                   </div>
@@ -439,16 +528,16 @@ export const Calendar: React.FC<CalendarProps> = ({ projects, onRefresh }) => {
               {/* Delivered */}
               {selectedEvents.other.length > 0 && (
                 <div>
-                  <div className="flex items-center gap-2 mb-1.5 text-xs text-emerald-300"><span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-400"></span> Delivered ({selectedEvents.other.length})</div>
+                  <div className="flex items-center gap-2 mb-1.5 text-xs text-green-300"><span className="inline-block w-2.5 h-2.5 rounded-full bg-green-400"></span> Delivered ({selectedEvents.other.length})</div>
                   <div className="space-y-1.5">
                     {selectedEvents.other.map(p => (
-                      <div key={p.id} className="p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30">
+                      <div key={p.id} className={`p-2 rounded-lg ${getStatusCardColors(p.status)}`}>
                         <div className="flex items-center justify-between">
                           <span className="text-xs sm:text-sm text-[#F6E9E9] font-medium truncate">{p.projectId || p.clientName}</span>
-                          <span className="text-[10px] text-emerald-300">{new Date(p.deadlineDate).toLocaleDateString()}</span>
+                          <span className={`text-[10px] ${getStatusDateColor(p.status)}`}>{new Date(p.deadlineDate).toLocaleDateString()}</span>
                         </div>
                         <div className="text-[11px] text-[#F6E9E9]/60 truncate">{p.clientName}</div>
-                        <div className="text-[10px] text-[#F6E9E9]/40">Status: {p.status}</div>
+                        <div className={`text-[10px] ${getStatusColor(p.status)}`}>Status: {p.status}</div>
                       </div>
                     ))}
                   </div>

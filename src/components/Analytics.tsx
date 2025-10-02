@@ -168,6 +168,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
   const totalEmployeePayments = filteredProjects.reduce((sum, project) => sum + project.paymentOfEmp, 0);
   const profit = totalRevenue - totalEmployeePayments;
   const profitMargin = totalRevenue > 0 ? (profit / totalRevenue) * 100 : 0;
+  const uniqueClients = new Set(filteredProjects.map(project => project.clientName)).size;
 
   const employeePerformance = useMemo(() => {
     return employees.map(employee => {
@@ -478,6 +479,20 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
             </div>
             <div className="p-2 sm:p-3 rounded-full bg-orange-500/20">
               <Users className="w-5 h-5 sm:w-6 sm:h-6 text-orange-300" />
+            </div>
+          </div>
+        </GlassCard>
+
+        <GlassCard className="p-4 sm:p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[#F6E9E9]/70 text-sm font-['Inter']">Unique Clients</p>
+              <p className="text-xl sm:text-2xl font-bold text-[#F6E9E9] mt-1 font-['Poppins']">
+                {uniqueClients}
+              </p>
+            </div>
+            <div className="p-2 sm:p-3 rounded-full bg-cyan-500/20">
+              <Users className="w-5 h-5 sm:w-6 sm:h-6 text-cyan-300" />
             </div>
           </div>
         </GlassCard>

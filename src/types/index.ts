@@ -7,9 +7,10 @@ export interface Project {
   deadlineDate: string;
   price: number;
   advance: number;
+  balance: number;
   assignedTo: string;
   paymentOfEmp: number;
-  status: 'Running' | 'Pending' | 'Delivered' | 'Correction' | 'Rejected';
+  status: 'Running' | 'Pending' | 'Pending Payment' | 'Delivered' | 'Correction' | 'Rejected';
   fastDeliver?: boolean;
   createdAt?: string;
   updatedAt?: string;

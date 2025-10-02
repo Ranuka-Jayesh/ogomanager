@@ -17,6 +17,7 @@ export const useProjects = () => {
     deadlineDate: project.deadline_date,
     price: project.price,
     advance: project.advance,
+    balance: project.balance || 0,
     assignedTo: project.assigned_to,
     paymentOfEmp: project.payment_of_emp,
     status: project.status,
@@ -34,6 +35,7 @@ export const useProjects = () => {
     deadline_date: project.deadlineDate,
     price: project.price,
     advance: project.advance,
+    balance: project.balance || 0,
     assigned_to: project.assignedTo || null,
     payment_of_emp: project.paymentOfEmp,
     status: project.status,
@@ -113,6 +115,10 @@ export const useProjects = () => {
       if (updates.deadlineDate !== undefined) updateData.deadline_date = updates.deadlineDate;
       if (updates.price !== undefined) updateData.price = updates.price;
       if (updates.advance !== undefined) updateData.advance = updates.advance;
+      // Only include balance if it's defined and not null
+      if (updates.balance !== undefined && updates.balance !== null) {
+        updateData.balance = updates.balance;
+      }
       if (updates.assignedTo !== undefined) updateData.assigned_to = updates.assignedTo || null;
       if (updates.paymentOfEmp !== undefined) updateData.payment_of_emp = updates.paymentOfEmp;
       if (updates.status !== undefined) updateData.status = updates.status;
@@ -127,7 +133,9 @@ export const useProjects = () => {
 
       if (updateError) {
         console.error('Error updating project:', updateError);
-        setError('Failed to update project');
+        console.error('Update data being sent:', updateData);
+        console.error('Project ID:', id);
+        setError(`Failed to update project: ${updateError.message || 'Unknown error'}`);
         return;
       }
 
