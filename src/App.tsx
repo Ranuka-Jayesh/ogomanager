@@ -13,6 +13,7 @@ import { useEmployees } from "./hooks/useEmployees";
 import { supabase } from "./supabaseClient";
 import { LogOut } from "lucide-react";
 import LoadingScreen from "./components/LoadingScreen";
+import { LastRefreshProvider } from "./contexts/LastRefreshContext";
 
 interface SessionData {
   email: string;
@@ -154,6 +155,16 @@ export function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showLogoutConfirm]);
 
+  // Listen for tab switch events from Header search
+  useEffect(() => {
+    const handleSwitchToProjectsTab = () => {
+      setActiveTab('projects');
+    };
+
+    window.addEventListener('switchToProjectsTab', handleSwitchToProjectsTab);
+    return () => window.removeEventListener('switchToProjectsTab', handleSwitchToProjectsTab);
+  }, []);
+
   const handleLoginSuccess = (email: string) => {
     createSession(email);
     setIsAuthenticated(true);
@@ -197,11 +208,12 @@ export function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#363333] via-[#272121] to-[#363333]">
-        <Header 
-          onMenuToggle={() => setMobileMenuOpen(!mobileMenuOpen)}
-          onSidebarToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
-        />
+    <LastRefreshProvider>
+      <div className="min-h-screen bg-gradient-to-br from-[#363333] via-[#272121] to-[#363333]">
+          <Header 
+            onMenuToggle={() => setMobileMenuOpen(!mobileMenuOpen)}
+            onSidebarToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
+          />
         <Navigation 
           activeTab={activeTab} 
           setActiveTab={setActiveTab}
@@ -253,6 +265,7 @@ export function App() {
           </div>
       </div>
       )}
-    </div>
+      </div>
+    </LastRefreshProvider>
   );
 }

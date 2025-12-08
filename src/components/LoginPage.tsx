@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { supabase } from '../supabaseClient';
-import { Mail, Lock, LogIn, Triangle } from 'lucide-react';
+import { Mail, Lock, LogIn, Triangle, Eye, EyeOff } from 'lucide-react';
 
 interface LoginPageProps {
   onLoginSuccess: (email: string) => void;
@@ -9,6 +9,7 @@ interface LoginPageProps {
 export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -96,13 +97,36 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
           <div className="relative">
             <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#E16428]" />
             <input
-              type="password"
+              type={showPassword ? 'text' : 'password'}
               placeholder="Password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full pl-12 pr-4 py-3 bg-[#1a1818]/80 border border-[#E16428]/30 rounded-lg text-[#F6E9E9] placeholder-[#F6E9E9]/50 focus:outline-none focus:border-[#E16428] focus:ring-2 focus:ring-[#E16428]/50 transition-all duration-300"
+              className="w-full pl-12 pr-12 py-3 bg-[#1a1818]/80 border border-[#E16428]/30 rounded-lg text-[#F6E9E9] placeholder-[#F6E9E9]/50 focus:outline-none focus:border-[#E16428] focus:ring-2 focus:ring-[#E16428]/50 transition-all duration-300"
               required
             />
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              className="absolute right-4 top-1/2 -translate-y-1/2 text-[#E16428] hover:text-[#F6E9E9] transition-colors duration-300 focus:outline-none"
+              aria-label={showPassword ? 'Hide password' : 'Show password'}
+            >
+              <div className="relative w-5 h-5">
+                <Eye
+                  className={`absolute inset-0 w-5 h-5 transition-all duration-300 ease-in-out ${
+                    showPassword
+                      ? 'opacity-0 rotate-90 scale-0'
+                      : 'opacity-100 rotate-0 scale-100'
+                  }`}
+                />
+                <EyeOff
+                  className={`absolute inset-0 w-5 h-5 transition-all duration-300 ease-in-out ${
+                    showPassword
+                      ? 'opacity-100 rotate-0 scale-100'
+                      : 'opacity-0 -rotate-90 scale-0'
+                  }`}
+                />
+              </div>
+            </button>
           </div>
 
           {error && (

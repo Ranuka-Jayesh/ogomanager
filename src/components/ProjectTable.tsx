@@ -12,6 +12,7 @@ interface ProjectTableProps {
   onEdit: (project: Project) => void;
   onDelete: (id: string) => void;
   onUpdateStatus: (id: string, updates: Partial<Project>) => void;
+  viewFilter?: string;
 }
 
 interface ProjectType {
@@ -25,6 +26,7 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
   onEdit,
   onDelete,
   onUpdateStatus,
+  viewFilter,
 }) => {
   const [projectTypes, setProjectTypes] = useState<ProjectType[]>([]);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -38,6 +40,9 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
     (currentPage - 1) * recordsPerPage,
     currentPage * recordsPerPage
   );
+
+  // Detect if current view is strictly for Pending Payment items
+  const isPendingPaymentView = viewFilter === 'Pending Payment' || (paginatedProjects.length > 0 && paginatedProjects.every(p => p.status === 'Pending Payment'));
 
   // Fetch project types from database
   useEffect(() => {
@@ -334,17 +339,21 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
                 </div>
                   </div>
 
-                  {/* Employee Payment */}
+                  {/* Employee Payment or Balance (Pending Payment view) */}
                   <div className="flex items-center gap-2">
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center ${project.paymentOfEmp < 0 ? 'bg-yellow-500/20' : 'bg-green-500/20'}`}>
-                      <svg className={`w-4 h-4 ${project.paymentOfEmp < 0 ? 'text-yellow-400' : 'text-green-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center ${isPendingPaymentView ? 'bg-yellow-500/20' : (project.paymentOfEmp < 0 ? 'bg-yellow-500/20' : 'bg-green-500/20')}`}>
+                      <svg className={`w-4 h-4 ${isPendingPaymentView ? 'text-yellow-400' : (project.paymentOfEmp < 0 ? 'text-yellow-400' : 'text-green-400')}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
                       </svg>
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="text-[#F6E9E9]/60 text-xs">Emp. Payment</p>
-                      <p className={`text-sm font-medium ${project.paymentOfEmp < 0 ? 'text-yellow-400' : 'text-green-400'}`}>
-                      LKR {project.paymentOfEmp.toLocaleString()}
+                      <p className="text-[#F6E9E9]/60 text-xs">{isPendingPaymentView ? 'Balance' : 'Emp.Payment'}</p>
+                      <p className={`text-sm font-medium ${isPendingPaymentView ? 'text-yellow-400' : (project.paymentOfEmp < 0 ? 'text-yellow-400' : 'text-green-400')}`}>
+                        {isPendingPaymentView ? (
+                          <>LKR {(project.balance ?? 0).toLocaleString()}</>
+                        ) : (
+                          <>LKR {project.paymentOfEmp.toLocaleString()}</>
+                        )}
                       </p>
                     </div>
                   </div>
@@ -386,7 +395,7 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
                   <th className="text-left align-middle text-xs sm:text-sm text-[#F6E9E9]/70 font-normal p-2 sm:p-4 font-['Inter'] whitespace-nowrap min-w-[120px]">assigned to</th>
                   <th className="text-left align-middle text-xs sm:text-sm text-[#F6E9E9]/70 font-normal p-2 sm:p-4 font-['Inter'] whitespace-nowrap min-w-[100px]">deadline</th>
                   <th className="text-left align-middle text-xs sm:text-sm text-[#F6E9E9]/70 font-normal p-2 sm:p-4 font-['Inter'] whitespace-nowrap min-w-[100px]">price</th>
-                  <th className="text-left align-middle text-xs sm:text-sm text-[#F6E9E9]/70 font-normal p-2 sm:p-4 font-['Inter'] whitespace-nowrap min-w-[100px]">emp. payment</th>
+                  <th className="text-left align-middle text-xs sm:text-sm text-[#F6E9E9]/70 font-normal p-2 sm:p-4 font-['Inter'] whitespace-nowrap min-w-[100px]">{isPendingPaymentView ? 'Balance' : 'Emp.Payment'}</th>
                   <th className="text-left align-middle text-xs sm:text-sm text-[#F6E9E9]/70 font-normal p-2 sm:p-4 font-['Inter'] whitespace-nowrap min-w-[100px]">status</th>
                   <th className="text-left align-middle text-xs sm:text-sm text-[#F6E9E9]/70 font-normal p-2 sm:p-4 font-['Inter'] whitespace-nowrap min-w-[100px]">actions</th>
             </tr>
@@ -426,12 +435,18 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
                       <span className="text-[#E16428] font-bold font-['Inter'] text-xs sm:text-sm">LKR {project.price.toLocaleString()}</span>
                     </td>
                     <td className="p-2 sm:p-4 align-middle min-w-[100px]">
-                      <span className={`flex items-center gap-1 font-medium ${project.paymentOfEmp < 0 ? 'text-yellow-400' : 'text-green-400/80'}`}>
-                        {project.paymentOfEmp < 0 && (
-                          <AlertTriangle className="w-3.5 h-3.5 animate-pulse" />
-                        )}
-                        LKR {project.paymentOfEmp.toLocaleString()}
-                      </span>
+                      {isPendingPaymentView ? (
+                        <span className={`flex items-center gap-1 font-medium text-yellow-400`}>
+                          LKR {(project.balance ?? 0).toLocaleString()}
+                        </span>
+                      ) : (
+                        <span className={`flex items-center gap-1 font-medium ${project.paymentOfEmp < 0 ? 'text-yellow-400' : 'text-green-400/80'}`}>
+                          {project.paymentOfEmp < 0 && (
+                            <AlertTriangle className="w-3.5 h-3.5 animate-pulse" />
+                          )}
+                          LKR {project.paymentOfEmp.toLocaleString()}
+                        </span>
+                      )}
                 </td>
                     <td className="p-2 sm:p-4 align-middle min-w-[100px]">
                   <select

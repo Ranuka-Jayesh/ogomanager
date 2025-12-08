@@ -3,6 +3,7 @@ import { Bell, Search, Menu, Wifi, WifiOff, Loader } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 import { Project, Employee } from '../types';
 import { useSupabaseConnection } from '../hooks/useSupabaseConnection';
+import { useLastRefresh } from '../contexts/LastRefreshContext';
 
 interface HeaderProps {
   onMenuToggle: () => void;
@@ -11,6 +12,8 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({ onMenuToggle }) => {
   const { status, isConnected, lastPing } = useSupabaseConnection();
+  const { lastRefresh } = useLastRefresh();
+  const [showLastUpdateTooltip, setShowLastUpdateTooltip] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchValue, setSearchValue] = useState('');
   const [searchResults, setSearchResults] = useState<Project[]>([]);
@@ -47,10 +50,6 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle }) => {
   const handleSearchComplete = () => {
     if (searchResults.length > 0) {
       addNotification(`Found ${searchResults.length} project(s)`, 'success');
-      // Auto-refresh after successful search
-      setTimeout(() => {
-        refreshData();
-      }, 2000); // Refresh after 2 seconds
     }
   };
 
@@ -174,7 +173,10 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle }) => {
     setLoading(true);
     const timeout = setTimeout(async () => {
       try {
-        // Search by client name
+        const searchLower = searchValue.toLowerCase().trim();
+        const searchUpper = searchValue.toUpperCase().trim();
+        
+        // Search by client name (flexible partial matching)
         const { data: projectsByName, error: nameError } = await supabase
           .from('projects')
           .select('*')
@@ -184,57 +186,127 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle }) => {
           console.error('Error searching by client name:', nameError);
         }
 
-        // Search by organization
+        // Search by organization (flexible partial matching)
         const { data: projectsByOrg, error: orgError } = await supabase
-        .from('projects')
-        .select('*')
+          .from('projects')
+          .select('*')
           .ilike('client_uni_org', `%${searchValue}%`);
         
         if (orgError) {
           console.error('Error searching by organization:', orgError);
         }
 
-        // Search by project ID
-        const { data: projectsById, error: idError } = await supabase
-        .from('projects')
-        .select('*')
-          .ilike('project_id', `%${searchValue.toUpperCase()}%`);
+        // Search by project ID - handle both full ID (PJ1234) and numeric-only (1234, 123, 12)
+        let projectsById: any[] = [];
         
-        if (idError) {
-          console.error('Error searching by project ID:', idError);
+        // Check if search is purely numeric (e.g., "1234", "123", "12")
+        const isNumericOnly = /^\d+$/.test(searchValue.trim());
+        
+        if (isNumericOnly) {
+          // For numeric-only searches, search with "PJ" prefix
+          const { data: projectsByFullId, error: fullIdError } = await supabase
+            .from('projects')
+            .select('*')
+            .ilike('project_id', `%PJ${searchValue}%`);
+          
+          if (fullIdError) {
+            console.error('Error searching by project ID:', fullIdError);
+          } else if (projectsByFullId) {
+            projectsById = projectsByFullId;
+          }
+          
+          // Also search for projects where the numeric part matches (e.g., searching "123" finds "PJ1234", "PJ1235", etc.)
+          // Fetch projects and filter client-side for numeric matching
+          const { data: allProjects, error: allProjectsError } = await supabase
+            .from('projects')
+            .select('*')
+            .ilike('project_id', 'PJ%'); // Only fetch PJ-prefixed projects for efficiency
+          
+          if (!allProjectsError && allProjects) {
+            const numericFiltered = allProjects.filter((project: any) => {
+              const projectId = project.project_id || '';
+              // Extract numeric part from project ID (e.g., "PJ1234" -> "1234")
+              const projectNumeric = projectId.replace(/[^0-9]/g, '');
+              // Check if the numeric part contains the search numeric value
+              return projectNumeric.includes(searchValue.trim());
+            });
+            // Merge with existing results
+            projectsById = [...projectsById, ...numericFiltered];
+          }
+        } else {
+          // For non-numeric searches, try full project ID match (e.g., "PJ1234", "pj1234")
+          const { data: projectsByFullId, error: fullIdError } = await supabase
+            .from('projects')
+            .select('*')
+            .ilike('project_id', `%${searchUpper}%`);
+          
+          if (fullIdError) {
+            console.error('Error searching by project ID:', fullIdError);
+          } else if (projectsByFullId) {
+            projectsById = projectsByFullId;
+          }
+          
+          // Also check if search contains numbers and try numeric matching
+          const numericMatch = searchValue.match(/\d+/);
+          if (numericMatch && numericMatch[0].length >= 2) {
+            const numericPart = numericMatch[0];
+            const { data: numericProjects, error: numericError } = await supabase
+              .from('projects')
+              .select('*')
+              .ilike('project_id', 'PJ%');
+            
+            if (!numericError && numericProjects) {
+              const numericFiltered = numericProjects.filter((project: any) => {
+                const projectId = project.project_id || '';
+                const projectNumeric = projectId.replace(/[^0-9]/g, '');
+                return projectNumeric.includes(numericPart);
+              });
+              projectsById = [...projectsById, ...numericFiltered];
+            }
+          }
         }
 
-      // Employee name search
-      const matchedEmps = employees.filter(emp =>
-        `${emp.firstName} ${emp.lastName}`.toLowerCase().includes(searchValue.toLowerCase())
-      );
+        // Employee name search (flexible partial matching - handles "na", "me", "Name", "name", etc.)
+        const matchedEmps = employees.filter(emp => {
+          const fullName = `${emp.firstName} ${emp.lastName}`.toLowerCase();
+          const firstName = (emp.firstName || '').toLowerCase();
+          const lastName = (emp.lastName || '').toLowerCase();
+          
+          // Check if search matches full name, first name, last name, or any substring
+          // This handles cases like "na" matching "Name", "me" matching "Name", etc.
+          return (
+            fullName.includes(searchLower) ||
+            firstName.includes(searchLower) ||
+            lastName.includes(searchLower)
+          );
+        });
         
         let projectsByEmp: any[] = [];
-      if (matchedEmps.length > 0) {
-        const empIds = matchedEmps.map(e => e.id);
+        if (matchedEmps.length > 0) {
+          const empIds = matchedEmps.map(e => e.id);
           const { data: empProjects, error: empError } = await supabase
-          .from('projects')
-          .select('*')
+            .from('projects')
+            .select('*')
             .in('assigned_to', empIds);
           
           if (empError) {
             console.error('Error searching by employee:', empError);
           } else if (empProjects) {
             projectsByEmp = empProjects;
-      }
+          }
         }
 
         // Merge and deduplicate all results
         const all = [
           ...(projectsByName || []), 
           ...(projectsByOrg || []), 
-          ...(projectsById || []), 
+          ...projectsById, 
           ...projectsByEmp
         ];
-      const unique = all.filter((p, i, arr) => arr.findIndex(x => x.id === p.id) === i);
+        const unique = all.filter((p, i, arr) => arr.findIndex(x => x.id === p.id) === i);
         
-      setSearchResults(unique);
-      setNoResults(unique.length === 0);
+        setSearchResults(unique);
+        setNoResults(unique.length === 0);
         
         // Trigger refresh if results found
         if (unique.length > 0) {
@@ -245,7 +317,7 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle }) => {
         setSearchResults([]);
         setNoResults(true);
       } finally {
-      setLoading(false);
+        setLoading(false);
       }
     }, 300);
     return () => clearTimeout(timeout);
@@ -255,7 +327,7 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle }) => {
     <>
     <header className="fixed top-0 left-0 right-0 z-50 backdrop-blur-md bg-[#363333]/20 border-b border-[#E16428]/20">
       <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4">
-        <div className="flex items-center space-x-3 sm:space-x-4">
+        <div className="flex items-center space-x-3 sm:space-x-4 lg:-ml-4 xl:-ml-6">
           {/* Mobile Menu Button */}
           <button
             onClick={onMenuToggle}
@@ -289,7 +361,7 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle }) => {
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-[#F6E9E9]/50" />
             <input
               type="text"
-              placeholder="Search projects... (Ctrl+K)"
+              placeholder="Looking for something?"
                 className="pl-10 pr-4 py-2 w-48 lg:w-64 bg-[#272121]/50 border border-[#E16428]/20 rounded-lg text-[#F6E9E9] placeholder-[#F6E9E9]/50 focus:outline-none focus:border-[#E16428] transition-all duration-300 font-['Inter'] cursor-pointer"
                 onFocus={() => setSearchOpen(true)}
                 readOnly
@@ -305,7 +377,15 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle }) => {
           </button>
 
             {/* Database Connectivity Icon */}
-            <div className="relative p-2 bg-[#272121]/50 border border-[#E16428]/20 rounded-lg hover:bg-[#E16428]/10 transition-all duration-300 flex items-center justify-center group">
+            <div 
+              className="relative p-2 bg-[#272121]/50 border border-[#E16428]/20 rounded-lg hover:bg-[#E16428]/10 transition-all duration-300 flex items-center justify-center group cursor-pointer sm:cursor-default"
+              onClick={() => {
+                // Toggle on click for mobile only
+                if (window.innerWidth < 640) {
+                  setShowLastUpdateTooltip(!showLastUpdateTooltip);
+                }
+              }}
+            >
               {status === 'connecting' ? (
                 <Loader className="w-5 h-5 text-[#F6E9E9] animate-spin" />
               ) : isConnected ? (
@@ -322,14 +402,24 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle }) => {
                     : 'bg-red-500'
                 }`}
               ></span>
-              {/* Tooltip */}
-              <div className="absolute bottom-full right-0 mb-2 px-2 py-1 bg-[#272121] text-[#F6E9E9] text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap">
-                {status === 'connecting' 
-                  ? 'Connecting...' 
-                  : isConnected 
-                  ? `Connected${lastPing ? ` (${lastPing.toLocaleTimeString()})` : ''}` 
-                  : 'Disconnected'
-                }
+              {/* Tooltip - Show on hover (desktop) or click (mobile) */}
+              <div className={`absolute top-full right-0 mt-2 px-2 py-1 bg-[#272121] text-[#F6E9E9] text-xs rounded z-50 pointer-events-none ${
+                showLastUpdateTooltip 
+                  ? 'opacity-100' 
+                  : 'opacity-0 sm:group-hover:opacity-100'
+              } transition-opacity duration-200`}>
+                <div>
+                  {status === 'connecting' 
+                    ? 'Connecting...' 
+                    : isConnected 
+                    ? (
+                        <>
+                          <div className="whitespace-nowrap">Connected{lastPing ? ` (${lastPing.toLocaleTimeString()})` : ''}</div>
+                        </>
+                      )
+                    : 'Disconnected'
+                  }
+                </div>
               </div>
             </div>
 
@@ -400,7 +490,7 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle }) => {
                 type="text"
                 value={searchValue}
                 onChange={e => setSearchValue(e.target.value)}
-                placeholder="Search by client name, project ID, organization, or employee... (ESC to close)"
+                placeholder="Looking for something?"
                 className="w-full px-6 py-4 rounded-xl bg-[#272121]/80 border border-[#E16428]/30 text-[#F6E9E9] placeholder-[#F6E9E9]/50 focus:outline-none focus:border-[#E16428] text-lg font-['Inter'] shadow-lg mb-2"
               />
               {/* Results Dropdown */}
@@ -437,8 +527,26 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle }) => {
                         onClick={() => {
                           setSearchOpen(false);
                           setSearchValue('');
-                          // You can add navigation logic here if needed
-                          console.log('Selected project:', mappedProject);
+                          // Extract month and year from project creation date
+                          const projectDate = mappedProject.createdAt ? new Date(mappedProject.createdAt) : new Date();
+                          const projectMonth = projectDate.getMonth(); // 0-11
+                          const projectYear = projectDate.getFullYear();
+                          
+                          // Store project ID, month, and year in sessionStorage for persistence across page switches
+                          sessionStorage.setItem('pendingProjectSearch', mappedProject.projectId);
+                          sessionStorage.setItem('pendingProjectMonth', projectMonth.toString());
+                          sessionStorage.setItem('pendingProjectYear', projectYear.toString());
+                          
+                          // Dispatch event to switch to projects tab
+                          window.dispatchEvent(new CustomEvent('switchToProjectsTab'));
+                          // Dispatch event with project ID, month, and year to filter in ProjectManagement (if already mounted)
+                          window.dispatchEvent(new CustomEvent('searchProjectById', { 
+                            detail: { 
+                              projectId: mappedProject.projectId,
+                              month: projectMonth,
+                              year: projectYear
+                            } 
+                          }));
                         }}
                       >
                         <div className="flex items-center gap-2">

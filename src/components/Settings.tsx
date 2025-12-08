@@ -23,6 +23,8 @@ export const Settings: React.FC = () => {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordMsg, setPasswordMsg] = useState('');
+  const [passwordMsgType, setPasswordMsgType] = useState<'error' | 'success'>('error');
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
 
   // Fetch project types
   useEffect(() => {
@@ -65,15 +67,115 @@ export const Settings: React.FC = () => {
     fetchTypes();
   }
 
-  // Dummy password change handler (replace with real auth logic)
-  function handleChangePassword(e: React.FormEvent) {
-    e.preventDefault();
-    if (newPassword !== confirmPassword) {
-      setPasswordMsg('New passwords do not match.');
-      return;
+  // Log action to database
+  const logAction = async (adminId: string | null, adminEmail: string, action: string) => {
+    try {
+      const { error } = await supabase
+        .from('log')
+        .insert({
+          admin_id: adminId,
+          admin_email: adminEmail,
+          action: action
+        });
+      
+      if (error) {
+        console.error('Error logging action:', error);
+      }
+    } catch (error) {
+      console.error('Failed to log action:', error);
     }
-    // TODO: Implement real password change logic with Supabase Auth
-    setPasswordMsg('Password change feature not implemented in this demo.');
+  };
+
+  // Password change handler
+  async function handleChangePassword(e: React.FormEvent) {
+    e.preventDefault();
+    setIsChangingPassword(true);
+    setPasswordMsg('');
+    setPasswordMsgType('error');
+
+    try {
+      // Validate inputs
+      if (!currentPassword.trim()) {
+        setPasswordMsg('Please enter your current password.');
+        setIsChangingPassword(false);
+        return;
+      }
+
+      if (!newPassword.trim()) {
+        setPasswordMsg('Please enter a new password.');
+        setIsChangingPassword(false);
+        return;
+      }
+
+      if (newPassword.length < 3) {
+        setPasswordMsg('New password must be at least 3 characters long.');
+        setIsChangingPassword(false);
+        return;
+      }
+
+      if (newPassword !== confirmPassword) {
+        setPasswordMsg('New passwords do not match.');
+        setIsChangingPassword(false);
+        return;
+      }
+
+      if (currentPassword === newPassword) {
+        setPasswordMsg('New password must be different from the current password.');
+        setIsChangingPassword(false);
+        return;
+      }
+
+      // Verify current password by finding the admin
+      const { data: admin, error: adminError } = await supabase
+        .from('admin')
+        .select('id, email, password')
+        .eq('password', currentPassword.trim())
+        .single();
+
+      if (adminError || !admin) {
+        // Log failed password change attempt
+        await logAction(null, 'Unknown', 'password_change_fail');
+        setPasswordMsg('Current password is incorrect.');
+        setIsChangingPassword(false);
+        return;
+      }
+
+      // Update password
+      const { error: updateError } = await supabase
+        .from('admin')
+        .update({ password: newPassword.trim() })
+        .eq('id', admin.id);
+
+      if (updateError) {
+        console.error('Error updating password:', updateError);
+        await logAction(admin.id, admin.email, 'password_change_error');
+        setPasswordMsg('Failed to update password. Please try again.');
+        setIsChangingPassword(false);
+        return;
+      }
+
+      // Log successful password change
+      await logAction(admin.id, admin.email, 'password_change_success');
+
+      // Success
+      setPasswordMsgType('success');
+      setPasswordMsg('Password changed successfully!');
+      
+      // Clear form
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+
+      // Clear success message after 5 seconds
+      setTimeout(() => {
+        setPasswordMsg('');
+      }, 5000);
+    } catch (error) {
+      console.error('Unexpected error during password change:', error);
+      setPasswordMsg('An unexpected error occurred. Please try again.');
+    } finally {
+      setIsChangingPassword(false);
+    }
   }
 
   // ESC key handler to close delete modal
@@ -191,11 +293,30 @@ export const Settings: React.FC = () => {
               />
               <button
                 type="submit"
-                className="bg-[#E16428] text-white px-4 py-2 rounded hover:bg-[#d35400] w-full"
+                disabled={isChangingPassword}
+                className="bg-[#E16428] text-white px-4 py-2 rounded hover:bg-[#d35400] w-full disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center justify-center"
               >
-                Change Password
+                {isChangingPassword ? (
+                  <>
+                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Changing...
+                  </>
+                ) : (
+                  'Change Password'
+                )}
               </button>
-              {passwordMsg && <div className="text-red-400">{passwordMsg}</div>}
+              {passwordMsg && (
+                <div className={`p-3 rounded-lg text-sm font-['Inter'] ${
+                  passwordMsgType === 'success' 
+                    ? 'bg-green-500/20 border border-green-500/30 text-green-400' 
+                    : 'bg-red-500/20 border border-red-500/30 text-red-400'
+                }`}>
+                  {passwordMsg}
+                </div>
+              )}
             </form>
           </section>
         )}

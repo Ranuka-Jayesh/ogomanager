@@ -176,10 +176,10 @@ export const Navigation: React.FC<NavigationProps> = ({
             </button>
             <div className={`transition-all duration-300 ${collapsed ? 'opacity-0 h-0 overflow-hidden' : 'opacity-100'}`}>
               <p className="text-xs text-center text-[#F6E9E9]/50 font-['Poppins']">
-                ogo manager V.06
+                ogo manager V.10
               </p>
               <p className="text-xs text-center text-[#F6E9E9]/30 font-['Poppins'] mt-1">
-                2025
+                2025 - 2026
               </p>
             </div>
           </div>

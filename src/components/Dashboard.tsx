@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { DollarSign, Clock, CheckCircle, AlertCircle } from 'lucide-react';
+import { DollarSign, Clock, CheckCircle, AlertCircle, Calendar, CalendarDays, ChevronDown } from 'lucide-react';
 import { Project, Employee } from '../types';
 import { GlassCard } from './GlassCard';
 import { useSupabaseConnection } from '../hooks/useSupabaseConnection';
 import { supabase } from '../supabaseClient';
+import { useLastRefresh } from '../contexts/LastRefreshContext';
 
 interface DashboardProps {
   projects: Project[];
@@ -13,14 +14,16 @@ interface DashboardProps {
 
 export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRefresh }) => {
   useSupabaseConnection();
+  const { setLastRefresh } = useLastRefresh();
   const now = new Date();
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth());
   const [selectedYear, setSelectedYear] = useState(now.getFullYear());
   const [projectTypes, setProjectTypes] = React.useState<{ id: string; name: string }[]>([]);
-  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [monthDropdownOpen, setMonthDropdownOpen] = useState(false);
+  const [yearDropdownOpen, setYearDropdownOpen] = useState(false);
 
-  // Filter projects by selected month and year
+  // Filter projects by selected month and year (for stats cards)
   const filteredProjects = projects.filter(project => {
     if (!project.createdAt) return false;
     const created = new Date(project.createdAt);
@@ -57,44 +60,21 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
       return sum + balance;
     }, 0);
 
-  // Auto-refresh functionality
+  // Manual refresh functionality (no auto-refresh)
   const handleRefresh = useCallback(async () => {
     if (onRefresh && !isRefreshing) {
       setIsRefreshing(true);
       try {
         await onRefresh();
-        setLastRefresh(new Date());
+        const refreshTime = new Date();
+        setLastRefresh(refreshTime);
       } catch (error) {
         console.error('Error refreshing dashboard data:', error);
       } finally {
         setIsRefreshing(false);
       }
     }
-  }, [onRefresh, isRefreshing]);
-
-  // Auto-refresh when component mounts or when navigating to dashboard
-  useEffect(() => {
-    handleRefresh();
-  }, []); // Only run on mount
-
-  // Refresh when window gains focus (user returns to the tab)
-  useEffect(() => {
-    const handleFocus = () => {
-      handleRefresh();
-    };
-
-    window.addEventListener('focus', handleFocus);
-    return () => window.removeEventListener('focus', handleFocus);
-  }, [handleRefresh]);
-
-  // Periodic refresh every 30 seconds when dashboard is active
-  useEffect(() => {
-    const interval = setInterval(() => {
-      handleRefresh();
-    }, 30000); // 30 seconds
-
-    return () => clearInterval(interval);
-  }, [handleRefresh]);
+  }, [onRefresh, isRefreshing, setLastRefresh]);
 
   React.useEffect(() => {
     async function fetchTypes() {
@@ -159,41 +139,84 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
     return () => {};
   }, []);
 
+
   return (
     <div className="space-y-6 sm:space-y-8 animate-fadeIn">
       <div className="flex flex-col sm:flex-row items-start sm:items-center sm:justify-between gap-4">
-        <div className="flex flex-row items-center justify-between w-full">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between w-full gap-3 sm:gap-0">
           <h1 className="text-2xl sm:text-3xl font-bold text-[#F6E9E9] font-['Playfair_Display']">
             Dashboard Overview
           </h1>
-          <div className="flex flex-row gap-2 ml-auto">
-            <select
-              value={selectedMonth}
-              onChange={e => setSelectedMonth(Number(e.target.value))}
-              className="pl-3 pr-3 py-2 bg-[#272121]/70 border border-[#E16428]/50 rounded-lg text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200 hover:border-[#E16428] focus:ring-2 focus:ring-[#E16428]/40 sm:text-sm text-xs shadow-sm hover:shadow-md focus:shadow-lg cursor-pointer"
-            >
-              {Array.from({ length: 12 }).map((_, i) => (
-                <option key={i} value={i} className="bg-[#272121] text-[#F6E9E9]">
-                  {new Date(0, i).toLocaleString('default', { month: 'long' })}
-                </option>
-              ))}
-            </select>
-            <select
-              value={selectedYear}
-              onChange={e => setSelectedYear(Number(e.target.value))}
-              className="pl-3 pr-3 py-2 bg-[#272121]/70 border border-[#E16428]/50 rounded-lg text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200 hover:border-[#E16428] focus:ring-2 focus:ring-[#E16428]/40 sm:text-sm text-xs shadow-sm hover:shadow-md focus:shadow-lg cursor-pointer"
-            >
-              {years.map(year => (
-                <option key={year} value={year} className="bg-[#272121] text-[#F6E9E9]">{year}</option>
-              ))}
-            </select>
+          <div className="flex flex-row gap-2 w-full sm:w-auto sm:ml-auto">
+            {/* Month Dropdown */}
+            <div className="relative w-1/2 sm:w-auto">
+              <button
+                onClick={() => setMonthDropdownOpen(!monthDropdownOpen)}
+                className="w-full pl-3 pr-9 py-2 bg-[#272121]/70 border border-[#E16428]/50 rounded-lg text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200 hover:border-[#E16428] focus:ring-2 focus:ring-[#E16428]/40 sm:text-sm text-xs shadow-sm hover:shadow-md focus:shadow-lg flex items-center justify-between gap-2"
+              >
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-[#E16428]" />
+                  <span className="sm:hidden">{new Date(0, selectedMonth).toLocaleString('default', { month: 'short' })}</span>
+                  <span className="hidden sm:inline">{new Date(0, selectedMonth).toLocaleString('default', { month: 'long' })}</span>
+                </div>
+                <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${monthDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {monthDropdownOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setMonthDropdownOpen(false)} />
+                  <div className="absolute z-20 mt-1 w-full bg-[#272121] border border-[#E16428]/30 rounded-lg shadow-lg overflow-hidden">
+                    {Array.from({ length: 12 }).map((_, i) => (
+                      <button
+                        key={i}
+                        onClick={() => {
+                          setSelectedMonth(i);
+                          setMonthDropdownOpen(false);
+                        }}
+                        className="w-full px-4 py-2 text-left flex items-center gap-2 text-[#F6E9E9] hover:bg-[#E16428]/20 transition-colors"
+                      >
+                        <CalendarDays className="w-4 h-4" />
+                        <span>{new Date(0, i).toLocaleString('default', { month: 'long' })}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+            
+            {/* Year Dropdown */}
+            <div className="relative w-1/2 sm:w-auto">
+              <button
+                onClick={() => setYearDropdownOpen(!yearDropdownOpen)}
+                className="w-full pl-3 pr-9 py-2 bg-[#272121]/70 border border-[#E16428]/50 rounded-lg text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200 hover:border-[#E16428] focus:ring-2 focus:ring-[#E16428]/40 sm:text-sm text-xs shadow-sm hover:shadow-md focus:shadow-lg flex items-center justify-between gap-2"
+              >
+                <div className="flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-[#E16428]" />
+                  <span>{selectedYear}</span>
+                </div>
+                <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${yearDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {yearDropdownOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setYearDropdownOpen(false)} />
+                  <div className="absolute z-20 mt-1 w-full bg-[#272121] border border-[#E16428]/30 rounded-lg shadow-lg overflow-hidden max-h-60 overflow-y-auto">
+                    {years.map(year => (
+                      <button
+                        key={year}
+                        onClick={() => {
+                          setSelectedYear(year);
+                          setYearDropdownOpen(false);
+                        }}
+                        className="w-full px-4 py-2 text-left flex items-center gap-2 text-[#F6E9E9] hover:bg-[#E16428]/20 transition-colors"
+                      >
+                        <Clock className="w-4 h-4" />
+                        <span>{year}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
           </div>
-        </div>
-        <div className="order-1 sm:order-2 w-full sm:w-auto">
-          <span className="text-sm text-[#F6E9E9]/60 font-['Inter'] block text-left sm:text-right">
-            Last update: {lastRefresh.toLocaleTimeString()}
-            {isRefreshing && <span className="ml-2 text-[#E16428] animate-pulse">Refreshing...</span>}
-          </span>
         </div>
       </div>
 
@@ -294,42 +317,44 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
           </div>
         </GlassCard>
 
-        <GlassCard className="p-4 sm:p-6">
-          <h2 className="text-lg sm:text-xl font-semibold text-[#F6E9E9] mb-4 font-['Poppins']">
-            Employee Performance
-          </h2>
-          <div className="space-y-3">
-            {employees.slice(0, 5).map((employee) => {
-              const filteredEmployeeProjects = filteredProjects.filter(p => p.assignedTo === employee.id);
-              const completedCount = filteredEmployeeProjects.filter(p => p.status === 'Delivered' || p.status === 'Pending Payment').length;
-              
-              return (
-                <div
-                  key={employee.id}
-                  className="flex items-center justify-between p-3 bg-[#272121]/30 rounded-lg border border-[#E16428]/10"
-                >
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[#F6E9E9] font-medium font-['Inter'] truncate">
-                      {employee.firstName} {employee.lastName}
-                    </p>
-                    <p className="text-[#F6E9E9]/70 text-sm truncate">
-                      {employee.position}
-                    </p>
-                  </div>
-                  <div className="text-right flex-shrink-0 ml-2">
-                    <p className="text-[#E16428] font-bold text-sm">
-                      {completedCount} completed
-                    </p>
-                    <p className="text-[#F6E9E9]/70 text-xs">
-                      {filteredEmployeeProjects.length} total
-                    </p>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </GlassCard>
       </div>
+
+      {/* Employee Performance */}
+      <GlassCard className="p-4 sm:p-6">
+        <h2 className="text-lg sm:text-xl font-semibold text-[#F6E9E9] mb-4 font-['Poppins']">
+          Employee Performance
+        </h2>
+        <div className="space-y-3">
+          {employees.slice(0, 5).map((employee) => {
+            const filteredEmployeeProjects = filteredProjects.filter(p => p.assignedTo === employee.id);
+            const completedCount = filteredEmployeeProjects.filter(p => p.status === 'Delivered' || p.status === 'Pending Payment').length;
+            
+            return (
+              <div
+                key={employee.id}
+                className="flex items-center justify-between p-3 bg-[#272121]/30 rounded-lg border border-[#E16428]/10"
+              >
+                <div className="flex-1 min-w-0">
+                  <p className="text-[#F6E9E9] font-medium font-['Inter'] truncate">
+                    {employee.firstName} {employee.lastName}
+                  </p>
+                  <p className="text-[#F6E9E9]/70 text-sm truncate">
+                    {employee.position}
+                  </p>
+                </div>
+                <div className="text-right flex-shrink-0 ml-2">
+                  <p className="text-[#E16428] font-bold text-sm">
+                    {completedCount} completed
+                  </p>
+                  <p className="text-[#F6E9E9]/70 text-xs">
+                    {filteredEmployeeProjects.length} total
+                  </p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </GlassCard>
     </div>
   );
 };

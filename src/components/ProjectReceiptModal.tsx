@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
-import { X, Download, Share2, Zap, Crown } from 'lucide-react';
+import { X, Download, Share2, Crown } from 'lucide-react';
 import { Project } from '../types';
 
 interface ProjectType {
@@ -46,18 +46,50 @@ export const ProjectReceiptModal: React.FC<ProjectReceiptModalProps> = ({ projec
     if (!element) return;
     setIsGenerating(true);
     try {
+      // Optimize scale for mobile devices
+      const isMobile = window.innerWidth < 768;
+      const scale = isMobile ? 2 : 3;
+      
       const canvas = await html2canvas(element, { 
-        scale: 3,
+        scale: scale,
         useCORS: true,
         allowTaint: true,
         backgroundColor: '#1a1818',
         width: element.offsetWidth,
-        height: element.offsetHeight
+        height: element.offsetHeight,
+        logging: false,
+        onclone: (clonedDoc) => {
+          // Ensure all images are loaded in cloned document
+          const clonedElement = clonedDoc.querySelector('[data-receipt]') || clonedDoc.body;
+          const images = clonedElement.querySelectorAll('img');
+          images.forEach((img: HTMLImageElement) => {
+            if (!img.complete) {
+              img.src = img.src;
+            }
+          });
+        }
       });
-      const imgData = canvas.toDataURL('image/png', 1.0);
-      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: [400, 600] });
-      pdf.addImage(imgData, 'PNG', 0, 0, 400, 600);
-      pdf.save(`project-receipt-${project.id}.pdf`);
+      const imgData = canvas.toDataURL('image/png', 0.95);
+      
+      // Calculate optimal PDF size based on canvas dimensions
+      const canvasWidth = canvas.width;
+      const canvasHeight = canvas.height;
+      const aspectRatio = canvasHeight / canvasWidth;
+      
+      // Use A4-like proportions but adjust to content
+      const pdfWidth = 400;
+      const pdfHeight = pdfWidth * aspectRatio;
+      
+      const pdf = new jsPDF({ 
+        orientation: pdfHeight > pdfWidth ? 'portrait' : 'landscape', 
+        unit: 'pt', 
+        format: [pdfWidth, pdfHeight] 
+      });
+      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      pdf.save(`project-receipt-${project.projectId}.pdf`);
+    } catch (error) {
+      console.error('Error downloading receipt:', error);
+      alert('Failed to download receipt. Please try again.');
     } finally {
       setIsGenerating(false);
     }
@@ -68,32 +100,108 @@ export const ProjectReceiptModal: React.FC<ProjectReceiptModalProps> = ({ projec
     if (!element) return;
     setIsGenerating(true);
     try {
+      // Optimize scale for mobile devices
+      const isMobile = window.innerWidth < 768;
+      const scale = isMobile ? 2 : 3;
+      
       const canvas = await html2canvas(element, { 
-        scale: 3,
+        scale: scale,
         useCORS: true,
         allowTaint: true,
         backgroundColor: '#1a1818',
         width: element.offsetWidth,
-        height: element.offsetHeight
+        height: element.offsetHeight,
+        logging: false,
+        onclone: (clonedDoc) => {
+          // Ensure all images are loaded in cloned document
+          const clonedElement = clonedDoc.querySelector('[data-receipt]') || clonedDoc.body;
+          const images = clonedElement.querySelectorAll('img');
+          images.forEach((img: HTMLImageElement) => {
+            if (!img.complete) {
+              img.src = img.src;
+            }
+          });
+        }
       });
-      const imgData = canvas.toDataURL('image/png', 1.0);
-      const blob = await (await fetch(imgData)).blob();
-      if ((navigator as any).share) {
-        const file = new File([blob], `project-receipt-${project.id}.png`, { type: 'image/png' });
-        (navigator as any).share({
-          title: 'Project Receipt',
-          text: 'Here is your project receipt!',
-          files: [file],
-        });
-      } else {
-        // fallback: download
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `project-receipt-${project.id}.png`;
-        a.click();
-        URL.revokeObjectURL(url);
+      
+      const imgData = canvas.toDataURL('image/png', 0.95);
+      
+      // Convert to blob
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((blob) => {
+          if (blob) {
+            resolve(blob);
+          } else {
+            reject(new Error('Failed to create blob'));
+          }
+        }, 'image/png', 0.95);
+      });
+      
+      // Check for Web Share API support (with files)
+      const shareData: any = {
+        title: 'Project Receipt',
+        text: `Project Receipt - ${project.projectId}`,
+      };
+      
+      // Try Web Share API with files (for supported browsers)
+      if (navigator.share && navigator.canShare) {
+        try {
+          const file = new File([blob], `project-receipt-${project.projectId}.png`, { 
+            type: 'image/png' 
+          });
+          shareData.files = [file];
+          
+          // Check if files can be shared
+          if (navigator.canShare(shareData)) {
+            await navigator.share(shareData);
+            return;
+          }
+        } catch (shareError) {
+          console.log('File sharing not supported, trying without files');
+        }
       }
+      
+      // Fallback 1: Try Web Share API without files (text only)
+      if (navigator.share) {
+        try {
+          // Create a data URL for sharing
+          const url = URL.createObjectURL(blob);
+          shareData.url = url;
+          delete shareData.files;
+          
+          await navigator.share(shareData);
+          // Clean up after a delay
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          return;
+        } catch (shareError: any) {
+          // If user cancels, don't show error
+          if (shareError.name === 'AbortError') {
+            return;
+          }
+          console.log('Share failed');
+        }
+      }
+      
+      // Fallback 2: On mobile, don't auto-download - show message instead
+      if (isMobile) {
+        // On mobile, inform user that sharing isn't available
+        alert('Sharing is not available on this device. Please use the Download button instead.');
+        return;
+      }
+      
+      // Fallback 3: Download the image (desktop only)
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `project-receipt-${project.projectId}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 100);
+      
+    } catch (error) {
+      console.error('Error sharing receipt:', error);
+      alert('Failed to share receipt. Please try downloading instead.');
     } finally {
       setIsGenerating(false);
     }
@@ -110,7 +218,7 @@ export const ProjectReceiptModal: React.FC<ProjectReceiptModalProps> = ({ projec
           <X className="w-5 h-5" />
         </button>
         {/* Receipt content */}
-        <div ref={receiptRef} className={`bg-[#1a1818] shadow-lg overflow-hidden font-['Inter'] min-h-[400px] ${isGenerating ? '' : 'rounded-2xl'}`}>
+        <div ref={receiptRef} data-receipt className={`bg-[#1a1818] shadow-lg overflow-hidden font-['Inter'] ${isGenerating ? '' : 'rounded-2xl'}`}>
           {/* Logo and header */}
           <div className="flex items-center justify-between pt-6 pb-2 px-6">
             <img src="/2OGOlogo.png" alt="OGO Technology" className="w-16 h-16 flex-shrink-0" />
@@ -124,7 +232,7 @@ export const ProjectReceiptModal: React.FC<ProjectReceiptModalProps> = ({ projec
           {/* Horizontal divider */}
           <div className="border-t border-[#E16428]/20 mx-6"></div>
           {/* Details section */}
-          <div className="px-6 pb-2">
+          <div className="px-6 pb-1">
             <div>
               <div className="flex justify-between py-1.5">
                 <span className="text-[10px] text-[#F6E9E9]/80 font-medium">Project ID</span>
@@ -156,7 +264,7 @@ export const ProjectReceiptModal: React.FC<ProjectReceiptModalProps> = ({ projec
               </div>
               <div className="flex justify-between py-1.5">
                 <span className="text-[10px] text-[#F6E9E9]/80 font-medium">Balance</span>
-                <span className="text-[10px] text-red-400 font-bold text-right">LKR {(project.price - project.advance).toLocaleString()}</span>
+                <span className="text-[10px] text-red-400 font-bold text-right">LKR {project.balance.toLocaleString()}</span>
               </div>
               <div className="flex justify-between py-1.5">
                 <span className="text-[10px] text-[#F6E9E9]/80 font-medium">Status</span>
@@ -175,24 +283,26 @@ export const ProjectReceiptModal: React.FC<ProjectReceiptModalProps> = ({ projec
             </div>
           </div>
           {/* Footer */}
-          <div className={`flex justify-between items-center px-6 py-3 border-t border-[#E16428]/10 bg-[#272121] ${isGenerating ? '' : 'rounded-b-2xl'}`}>
+          <div className={`flex justify-between items-center px-6 py-2 border-t border-[#E16428]/10 bg-[#272121] ${isGenerating ? '' : 'rounded-b-2xl'}`}>
             <span className="text-[10px] text-[#F6E9E9]/50">Generated on: {new Date().toLocaleDateString()}</span>
             <span className="text-[10px] text-[#E16428] font-bold">ogo technology</span>
           </div>
         </div>
         {/* Action buttons */}
-        <div className="flex flex-col sm:flex-row justify-center gap-3 p-4 bg-transparent mt-2">
+        <div className="flex flex-col sm:flex-row justify-center gap-3 p-3 bg-transparent mt-1">
           <button
             onClick={handleDownload}
-            className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-[#E16428] text-white rounded-lg shadow hover:bg-[#e16428]/90 transition text-xs font-bold"
+            disabled={isGenerating}
+            className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-[#E16428] text-white rounded-lg shadow hover:bg-[#e16428]/90 transition text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <Download className="w-4 h-4" /> Download
+            <Download className="w-4 h-4" /> {isGenerating ? 'Generating...' : 'Download'}
           </button>
           <button
             onClick={handleShare}
-            className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-[#363333] text-white rounded-lg shadow hover:bg-[#272121] transition text-xs font-bold"
+            disabled={isGenerating}
+            className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-[#363333] text-white rounded-lg shadow hover:bg-[#272121] transition text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <Share2 className="w-4 h-4" /> Share
+            <Share2 className="w-4 h-4" /> {isGenerating ? 'Sharing...' : 'Share'}
           </button>
         </div>
       </div>

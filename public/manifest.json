@@ -1,0 +1,37 @@
+{
+  "name": "Manager Pro",
+  "short_name": "Manager Pro",
+  "description": "Online sales management system",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1a1818",
+  "theme_color": "#E16428",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/Logo.jpg",
+      "sizes": "96x96",
+      "type": "image/jpeg",
+      "purpose": "any"
+    },
+    {
+      "src": "/Logo.jpg",
+      "sizes": "144x144",
+      "type": "image/jpeg",
+      "purpose": "any"
+    },
+    {
+      "src": "/Logo.jpg",
+      "sizes": "192x192",
+      "type": "image/jpeg",
+      "purpose": "any"
+    },
+    {
+      "src": "/Logo.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    }
+  ]
+}
+

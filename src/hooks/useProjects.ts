@@ -7,6 +7,15 @@ export const useProjects = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const toNumber = (value: any): number => {
+    if (typeof value === 'number') return value;
+    if (typeof value === 'string') {
+      const p = parseFloat(value);
+      return isNaN(p) ? 0 : p;
+    }
+    return 0;
+  };
+
   // Map database row to Project object
   const mapProjectFromDB = (project: any): Project => ({
     id: project.id,
@@ -15,11 +24,12 @@ export const useProjects = () => {
     clientUniOrg: project.client_uni_org,
     projectDescription: project.project_description,
     deadlineDate: project.deadline_date,
-    price: project.price,
-    advance: project.advance,
-    balance: project.balance || 0,
+    price: toNumber(project.price),
+    advance: toNumber(project.advance),
+    // Strictly use stored balance from DB
+    balance: toNumber(project.balance),
     assignedTo: project.assigned_to,
-    paymentOfEmp: project.payment_of_emp,
+    paymentOfEmp: toNumber(project.payment_of_emp),
     status: project.status,
     fastDeliver: project.fast_deliver || false,
     createdAt: project.created_at,
@@ -35,7 +45,7 @@ export const useProjects = () => {
     deadline_date: project.deadlineDate,
     price: project.price,
     advance: project.advance,
-    balance: project.balance || 0,
+    balance: project.balance,
     assigned_to: project.assignedTo || null,
     payment_of_emp: project.paymentOfEmp,
     status: project.status,

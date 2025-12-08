@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Calendar, Loader2, Clock, ArrowUp } from 'lucide-react';
+import { Plus, Calendar, Loader2, Clock, ArrowUp, CalendarDays, ChevronDown, List, PlayCircle, Hourglass, CreditCard, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
 import { Project, Employee } from '../types';
 import { ProjectModal } from './ProjectModal';
 import { ProjectTable } from './ProjectTable';
@@ -29,9 +29,81 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
   const [paymentConfirmationProject, setPaymentConfirmationProject] = useState<Project | null>(null);
   const [projectTypes, setProjectTypes] = useState<{ id: string; name: string }[]>([]);
   const [showScrollTop, setShowScrollTop] = useState(false);
+  const [monthDropdownOpen, setMonthDropdownOpen] = useState(false);
+  const [yearDropdownOpen, setYearDropdownOpen] = useState(false);
+  const [filterDropdownOpen, setFilterDropdownOpen] = useState(false);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Check for pending project search from sessionStorage on mount
+  useEffect(() => {
+    const pendingSearch = sessionStorage.getItem('pendingProjectSearch');
+    const pendingMonth = sessionStorage.getItem('pendingProjectMonth');
+    const pendingYear = sessionStorage.getItem('pendingProjectYear');
+    
+    if (pendingSearch) {
+      // Clear them immediately to prevent re-triggering
+      sessionStorage.removeItem('pendingProjectSearch');
+      
+      // Set month and year if available
+      if (pendingMonth !== null) {
+        const month = parseInt(pendingMonth, 10);
+        if (!isNaN(month) && month >= 0 && month <= 11) {
+          setSelectedMonth(month);
+          sessionStorage.removeItem('pendingProjectMonth');
+        }
+      }
+      
+      if (pendingYear !== null) {
+        const year = parseInt(pendingYear, 10);
+        if (!isNaN(year) && year > 2000 && year < 2100) {
+          setSelectedYear(year);
+          sessionStorage.removeItem('pendingProjectYear');
+        }
+      }
+      
+      // Set search value after component is fully mounted
+      setTimeout(() => {
+        setSearch(pendingSearch);
+        // Focus the search input and scroll to top
+        setTimeout(() => {
+          searchInputRef.current?.focus();
+          scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+        }, 200);
+      }, 100);
+    }
+  }, []);
+
+  // Listen for search events from Header component (for immediate updates when already on projects page)
+  useEffect(() => {
+    const handleSearchProjectById = (event: Event) => {
+      const customEvent = event as CustomEvent<{ projectId: string; month?: number; year?: number }>;
+      if (customEvent.detail?.projectId) {
+        // Set month and year if provided
+        if (customEvent.detail.month !== undefined && customEvent.detail.month >= 0 && customEvent.detail.month <= 11) {
+          setSelectedMonth(customEvent.detail.month);
+        }
+        if (customEvent.detail.year !== undefined && customEvent.detail.year > 2000 && customEvent.detail.year < 2100) {
+          setSelectedYear(customEvent.detail.year);
+        }
+        
+        // Wait a bit for the tab to switch and component to mount
+        setTimeout(() => {
+          setSearch(customEvent.detail.projectId);
+          // Focus the search input after setting the value
+          setTimeout(() => {
+            searchInputRef.current?.focus();
+            // Scroll to top to show the filtered results
+            scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+          }, 200);
+        }, 300);
+      }
+    };
+
+    window.addEventListener('searchProjectById', handleSearchProjectById);
+    return () => window.removeEventListener('searchProjectById', handleSearchProjectById);
+  }, []);
 
   // Keyboard shortcuts handler
   useEffect(() => {
@@ -153,6 +225,7 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
       return (
         (project.clientName && project.clientName.toLowerCase().includes(searchLower)) ||
         (project.clientUniOrg && project.clientUniOrg.toLowerCase().includes(searchLower)) ||
+        (project.projectId && project.projectId.toLowerCase().includes(searchLower)) ||
         employeeName.includes(searchLower)
       );
     });
@@ -293,7 +366,7 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
     <div 
       ref={scrollContainerRef}
       onScroll={handleScroll}
-      className="space-y-3 sm:space-y-6 animate-fadeIn overflow-y-auto sm:overflow-hidden max-h-screen px-2 sm:px-0"
+      className="space-y-3 sm:space-y-6 animate-fadeIn overflow-y-auto sm:overflow-hidden max-h-[calc(100vh-5rem)] sm:max-h-screen px-2 sm:px-0"
     >
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4">
         <h1 className="text-xl sm:text-3xl font-bold text-[#F6E9E9] font-['Playfair_Display']">
@@ -302,35 +375,72 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
         <div className="flex flex-col sm:flex-row items-center gap-2 w-full sm:w-auto">
           {/* Month/Year Filter */}
           <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+            {/* Month Dropdown */}
             <div className="relative w-full sm:w-auto">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[#E16428] pointer-events-none">
-                <Calendar className="w-4 h-4" />
-              </span>
-              <select
-                value={selectedMonth}
-                onChange={e => setSelectedMonth(Number(e.target.value))}
-                className="w-full sm:w-auto pl-9 pr-3 py-2 bg-[#272121]/70 border border-[#E16428]/30 rounded-lg text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200 hover:border-[#E16428] focus:ring-2 focus:ring-[#E16428]/30 sm:text-sm text-xs"
+              <button
+                onClick={() => setMonthDropdownOpen(!monthDropdownOpen)}
+                className="w-full sm:w-auto pl-9 pr-9 py-2 bg-[#272121]/70 border border-[#E16428]/30 rounded-lg text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200 hover:border-[#E16428] focus:ring-2 focus:ring-[#E16428]/30 sm:text-sm text-xs flex items-center justify-between"
               >
-                {Array.from({ length: 12 }).map((_, i) => (
-                  <option key={i} value={i} className="bg-[#272121] text-[#F6E9E9]">
-                    {new Date(0, i).toLocaleString('default', { month: 'long' })}
-                  </option>
-                ))}
-              </select>
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-[#E16428]" />
+                  <span>{new Date(0, selectedMonth).toLocaleString('default', { month: 'long' })}</span>
+                </div>
+                <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${monthDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {monthDropdownOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setMonthDropdownOpen(false)} />
+                  <div className="absolute z-20 mt-1 w-full bg-[#272121] border border-[#E16428]/30 rounded-lg shadow-lg overflow-hidden">
+                    {Array.from({ length: 12 }).map((_, i) => (
+                      <button
+                        key={i}
+                        onClick={() => {
+                          setSelectedMonth(i);
+                          setMonthDropdownOpen(false);
+                        }}
+                        className="w-full px-4 py-2 text-left flex items-center gap-2 text-[#F6E9E9] hover:bg-[#E16428]/20 transition-colors"
+                      >
+                        <CalendarDays className="w-4 h-4" />
+                        <span>{new Date(0, i).toLocaleString('default', { month: 'long' })}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
+            
+            {/* Year Dropdown */}
             <div className="relative w-full sm:w-auto">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[#E16428] pointer-events-none">
-                <Clock className="w-4 h-4" />
-              </span>
-              <select
-                value={selectedYear}
-                onChange={e => setSelectedYear(Number(e.target.value))}
-                className="w-full sm:w-auto pl-9 pr-3 py-2 bg-[#272121]/70 border border-[#E16428]/30 rounded-lg text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200 hover:border-[#E16428] focus:ring-2 focus:ring-[#E16428]/30 sm:text-sm text-xs"
+              <button
+                onClick={() => setYearDropdownOpen(!yearDropdownOpen)}
+                className="w-full sm:w-auto pl-9 pr-9 py-2 bg-[#272121]/70 border border-[#E16428]/30 rounded-lg text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200 hover:border-[#E16428] focus:ring-2 focus:ring-[#E16428]/30 sm:text-sm text-xs flex items-center justify-between"
               >
-                {years.map(year => (
-                  <option key={year} value={year} className="bg-[#272121] text-[#F6E9E9]">{year}</option>
-                ))}
-              </select>
+                <div className="flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-[#E16428]" />
+                  <span>{selectedYear}</span>
+                </div>
+                <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${yearDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {yearDropdownOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setYearDropdownOpen(false)} />
+                  <div className="absolute z-20 mt-1 w-full bg-[#272121] border border-[#E16428]/30 rounded-lg shadow-lg overflow-hidden max-h-60 overflow-y-auto">
+                    {years.map(year => (
+                      <button
+                        key={year}
+                        onClick={() => {
+                          setSelectedYear(year);
+                          setYearDropdownOpen(false);
+                        }}
+                        className="w-full px-4 py-2 text-left flex items-center gap-2 text-[#F6E9E9] hover:bg-[#E16428]/20 transition-colors"
+                      >
+                        <Clock className="w-4 h-4" />
+                        <span>{year}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           </div>
                     {/* Search Bar */}
@@ -338,15 +448,15 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
             type="text"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="Search by employee, client, or university... (Alt+K)"
+            placeholder="Looking for something?"
             className="w-full sm:w-64 px-4 py-2 bg-[#272121]/70 border border-[#E16428]/30 rounded-lg text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200 mb-2 sm:mb-0 text-xs sm:text-sm"
             ref={searchInputRef}
           />
           {/* Sorting Buttons */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 w-full sm:w-auto">
             <button
               onClick={() => setSortBy(sortBy === 'deadline-asc' ? 'deadline-desc' : 'deadline-asc')}
-              className={`px-3 py-2 rounded-lg font-['Inter'] text-xs sm:text-sm transition-all duration-200 border border-[#E16428]/30 ${sortBy.startsWith('deadline') ? 'bg-[#E16428] text-white' : 'bg-[#272121]/50 text-[#F6E9E9]/70 hover:bg-[#E16428]/20'}`}
+              className={`w-1/2 sm:w-auto px-3 py-2 rounded-lg font-['Inter'] text-xs sm:text-sm transition-all duration-200 border border-[#E16428]/30 ${sortBy.startsWith('deadline') ? 'bg-[#E16428] text-white' : 'bg-[#272121]/50 text-[#F6E9E9]/70 hover:bg-[#E16428]/20'}`}
               title="Sort by Deadline"
             >
               <span className="sm:hidden">Dead {sortBy === 'deadline-asc' ? '↑' : '↓'}</span>
@@ -354,7 +464,7 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
             </button>
             <button
               onClick={() => setSortBy(sortBy === 'projectId-asc' ? 'projectId-desc' : 'projectId-asc')}
-              className={`px-3 py-2 rounded-lg font-['Inter'] text-xs sm:text-sm transition-all duration-200 border border-[#E16428]/30 ${sortBy.startsWith('projectId') ? 'bg-[#E16428] text-white' : 'bg-[#272121]/50 text-[#F6E9E9]/70 hover:bg-[#E16428]/20'}`}
+              className={`w-1/2 sm:w-auto px-3 py-2 rounded-lg font-['Inter'] text-xs sm:text-sm transition-all duration-200 border border-[#E16428]/30 ${sortBy.startsWith('projectId') ? 'bg-[#E16428] text-white' : 'bg-[#272121]/50 text-[#F6E9E9]/70 hover:bg-[#E16428]/20'}`}
               title="Sort by Project No."
             >
               <span className="sm:hidden">ID {sortBy === 'projectId-asc' ? '↑' : '↓'}</span>
@@ -364,22 +474,108 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
         </div>
       </div>
 
-      {/* Filter Buttons */}
-      <div className="flex flex-wrap gap-2 sm:gap-4">
-        {['all', 'Running', 'Pending', 'Pending Payment', 'Delivered', 'Correction', 'Rejected'].map((status) => (
-          <button
-            key={status}
-            onClick={() => setFilter(status)}
-            className={`px-3 sm:px-4 py-2 rounded-lg transition-all duration-300 font-['Inter'] text-xs sm:text-sm ${
-              filter === status
-                ? 'bg-[#E16428] text-white'
-                : 'bg-[#272121]/50 text-[#F6E9E9]/70 hover:bg-[#E16428]/20'
-            }`}
-          >
-            <span className="sm:hidden">{status === 'all' ? 'All' : status}</span>
-            <span className="hidden sm:inline">{status === 'all' ? 'All Projects' : status}</span>
-          </button>
-        ))}
+      {/* Filter Buttons - Mobile Dropdown */}
+      <div className="relative sm:hidden w-full">
+        <button
+          onClick={() => setFilterDropdownOpen(!filterDropdownOpen)}
+          className="w-full px-4 py-2 rounded-lg bg-[#272121]/50 border border-[#E16428]/30 text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200 flex items-center justify-between"
+        >
+          <div className="flex items-center gap-2">
+            {filter === 'all' && <List className="w-4 h-4" />}
+            {filter === 'Running' && <PlayCircle className="w-4 h-4" />}
+            {filter === 'Pending' && <Hourglass className="w-4 h-4" />}
+            {filter === 'Pending Payment' && <CreditCard className="w-4 h-4" />}
+            {filter === 'Delivered' && <CheckCircle2 className="w-4 h-4" />}
+            {filter === 'Correction' && <AlertTriangle className="w-4 h-4" />}
+            {filter === 'Rejected' && <XCircle className="w-4 h-4" />}
+            <span>{filter === 'all' ? 'All Projects' : filter}</span>
+          </div>
+          <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${filterDropdownOpen ? 'rotate-180' : ''}`} />
+        </button>
+        {filterDropdownOpen && (
+          <>
+            <div className="fixed inset-0 z-10" onClick={() => setFilterDropdownOpen(false)} />
+            <div className="absolute z-20 mt-1 w-full bg-[#272121] border border-[#E16428]/30 rounded-lg shadow-lg overflow-hidden max-h-60 overflow-y-auto">
+              {['all', 'Running', 'Pending', 'Pending Payment', 'Delivered', 'Correction', 'Rejected'].map((status) => {
+                const getIcon = () => {
+                  switch (status) {
+                    case 'all':
+                      return <List className="w-4 h-4" />;
+                    case 'Running':
+                      return <PlayCircle className="w-4 h-4" />;
+                    case 'Pending':
+                      return <Hourglass className="w-4 h-4" />;
+                    case 'Pending Payment':
+                      return <CreditCard className="w-4 h-4" />;
+                    case 'Delivered':
+                      return <CheckCircle2 className="w-4 h-4" />;
+                    case 'Correction':
+                      return <AlertTriangle className="w-4 h-4" />;
+                    case 'Rejected':
+                      return <XCircle className="w-4 h-4" />;
+                    default:
+                      return null;
+                  }
+                };
+
+                return (
+                  <button
+                    key={status}
+                    onClick={() => {
+                      setFilter(status);
+                      setFilterDropdownOpen(false);
+                    }}
+                    className="w-full px-4 py-2 text-left flex items-center gap-2 text-[#F6E9E9] hover:bg-[#E16428]/20 transition-colors"
+                  >
+                    {getIcon()}
+                    <span>{status === 'all' ? 'All Projects' : status}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Filter Buttons - Desktop */}
+      <div className="hidden sm:flex flex-wrap gap-2 sm:gap-4">
+        {['all', 'Running', 'Pending', 'Pending Payment', 'Delivered', 'Correction', 'Rejected'].map((status) => {
+          const getIcon = () => {
+            switch (status) {
+              case 'all':
+                return <List className="w-4 h-4" />;
+              case 'Running':
+                return <PlayCircle className="w-4 h-4" />;
+              case 'Pending':
+                return <Hourglass className="w-4 h-4" />;
+              case 'Pending Payment':
+                return <CreditCard className="w-4 h-4" />;
+              case 'Delivered':
+                return <CheckCircle2 className="w-4 h-4" />;
+              case 'Correction':
+                return <AlertTriangle className="w-4 h-4" />;
+              case 'Rejected':
+                return <XCircle className="w-4 h-4" />;
+              default:
+                return null;
+            }
+          };
+
+          return (
+            <button
+              key={status}
+              onClick={() => setFilter(status)}
+              className={`px-3 sm:px-4 py-2 rounded-lg transition-all duration-300 font-['Inter'] text-xs sm:text-sm flex items-center gap-2 ${
+                filter === status
+                  ? 'bg-[#E16428] text-white'
+                  : 'bg-[#272121]/50 text-[#F6E9E9]/70 hover:bg-[#E16428]/20'
+              }`}
+            >
+              {getIcon()}
+              <span>{status === 'all' ? 'All Projects' : status}</span>
+            </button>
+          );
+        })}
       </div>
 
       {/* Content: Only show the table view, no cards or view mode toggle */}
@@ -395,7 +591,7 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
       ) : (
         <>
           {/* Mobile: Cute row cards */}
-          <div className="block sm:hidden space-y-3">
+          <div className="block sm:hidden space-y-3 pb-16 mb-4">
             {filteredProjects.map((project) => {
               const employee = employees.find(emp => emp.id === project.assignedTo);
               const statusColors = {
@@ -524,17 +720,21 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
                       </div>
                     </div>
 
-                    {/* Employee Payment */}
+                    {/* Employee Payment or Balance (if Pending Payment tab) */}
                     <div className="flex items-center gap-2">
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center ${project.paymentOfEmp < 0 ? 'bg-yellow-500/20' : 'bg-green-500/20'}`}>
-                        <svg className={`w-4 h-4 ${project.paymentOfEmp < 0 ? 'text-yellow-400' : 'text-green-400'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center ${(filter === 'Pending Payment') ? 'bg-yellow-500/20' : (project.paymentOfEmp < 0 ? 'bg-yellow-500/20' : 'bg-green-500/20')}`}>
+                        <svg className={`w-4 h-4 ${(filter === 'Pending Payment') ? 'text-yellow-400' : (project.paymentOfEmp < 0 ? 'text-yellow-400' : 'text-green-400')}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
                         </svg>
                         </div>
                       <div className="min-w-0 flex-1">
-                        <p className="text-[#F6E9E9]/60 text-xs">Emp. Payment</p>
-                        <p className={`text-sm font-medium ${project.paymentOfEmp < 0 ? 'text-yellow-400' : 'text-green-400'}`}>
-                          LKR {project.paymentOfEmp.toLocaleString()}
+                        <p className="text-[#F6E9E9]/60 text-xs">{filter === 'Pending Payment' ? 'Balance' : 'Emp.Payment'}</p>
+                        <p className={`text-sm font-medium ${(filter === 'Pending Payment') ? 'text-yellow-400' : (project.paymentOfEmp < 0 ? 'text-yellow-400' : 'text-green-400')}`}>
+                          {filter === 'Pending Payment' ? (
+                            <>LKR {(project.balance ?? 0).toLocaleString()}</>
+                          ) : (
+                            <>LKR {project.paymentOfEmp.toLocaleString()}</>
+                          )}
                         </p>
                       </div>
                     </div>
@@ -569,7 +769,8 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
               employees={employees}
               onEdit={handleEdit}
               onDelete={handleDelete}
-              onUpdateStatus={(id, updates) => updateProject(id, updates)}
+            onUpdateStatus={(id, updates) => updateProject(id, updates)}
+            viewFilter={filter}
             />
         </div>
           {/* Receipt Modal (mobile and desktop) */}
@@ -644,22 +845,24 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
         />
       )}
 
-      {showScrollTop && (
-        <button
-          onClick={scrollToTop}
-          className="fixed bottom-6 left-6 bg-gradient-to-r from-[#E16428]/70 to-[#E16428]/50 text-white w-10 h-10 rounded-full flex items-center justify-center shadow-lg hover:scale-110 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#E16428] focus:ring-offset-[#272121] transition-all duration-300 z-40 sm:hidden"
-          aria-label="Scroll to top"
-          title="Scroll to Top"
-        >
-          <ArrowUp className="w-5 h-5" />
-        </button>
-      )}
+      <button
+        onClick={scrollToTop}
+        className={`fixed bottom-6 left-6 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white w-12 h-12 min-w-[3rem] min-h-[3rem] aspect-square rounded-full flex items-center justify-center shadow-lg hover:scale-110 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#E16428] focus:ring-offset-[#272121] transition-all duration-300 z-40 sm:hidden p-0 ${
+          showScrollTop 
+            ? 'opacity-100 translate-y-0 pointer-events-auto' 
+            : 'opacity-0 translate-y-4 pointer-events-none'
+        }`}
+        aria-label="Scroll to top"
+        title="Scroll to Top"
+      >
+        <ArrowUp className="w-6 h-6" />
+      </button>
 
 
 
       <button
         onClick={handleAdd}
-        className="fixed bottom-6 right-6 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white w-12 h-12 rounded-full flex items-center justify-center shadow-lg hover:scale-110 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#E16428] focus:ring-offset-[#272121] transition-all duration-300 z-40 animate-pulse group"
+        className="fixed bottom-6 right-6 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white w-12 h-12 min-w-[3rem] min-h-[3rem] aspect-square rounded-full flex items-center justify-center shadow-lg hover:scale-110 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#E16428] focus:ring-offset-[#272121] transition-all duration-300 z-40 animate-pulse group p-0"
         aria-label="Add Project (Alt+A)"
         title="Add New Project (Alt+A)"
       >

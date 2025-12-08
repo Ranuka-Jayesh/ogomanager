@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { Project } from '../types';
+import { useLastRefresh } from '../contexts/LastRefreshContext';
 
 interface CalendarProps {
   projects: Project[];
@@ -40,9 +41,9 @@ const buildCalendarGrid = (anchor: Date) => {
 };
 
 export const Calendar: React.FC<CalendarProps> = ({ projects, onRefresh }) => {
+  const { setLastRefresh } = useLastRefresh();
   const [anchorDate, setAnchorDate] = useState<Date>(() => startOfMonth(new Date()));
   const [activeDateKey, setActiveDateKey] = useState<string | null>(null);
-  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Function to get status color
@@ -211,14 +212,15 @@ export const Calendar: React.FC<CalendarProps> = ({ projects, onRefresh }) => {
       setIsRefreshing(true);
       try {
         await onRefresh();
-        setLastRefresh(new Date());
+        const refreshTime = new Date();
+        setLastRefresh(refreshTime);
       } catch (error) {
         console.error('Error refreshing calendar data:', error);
       } finally {
         setIsRefreshing(false);
       }
     }
-  }, [onRefresh, isRefreshing]);
+  }, [onRefresh, isRefreshing, setLastRefresh]);
 
   // Auto-refresh when component mounts or when navigating to calendar
   useEffect(() => {
@@ -271,21 +273,15 @@ export const Calendar: React.FC<CalendarProps> = ({ projects, onRefresh }) => {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0">
         <div>
           <h2 className="text-xl sm:text-2xl font-bold text-[#F6E9E9] font-['Playfair_Display']">Calendar</h2>
           <p className="text-xs text-[#F6E9E9]/60">Deadlines for running and overdue projects</p>
-          {lastRefresh && (
-            <p className="text-[10px] text-[#F6E9E9]/40 mt-1">
-              Last updated: {lastRefresh.toLocaleTimeString()}
-              {isRefreshing && <span className="ml-2 text-[#E16428] animate-pulse">Refreshing...</span>}
-            </p>
-          )}
         </div>
-        <div className="flex items-center gap-1.5">
-          <button onClick={goPrevMonth} className="px-2.5 py-1.5 rounded-lg bg-[#1a1818]/70 border border-[#E16428]/30 text-[#F6E9E9] hover:bg-[#E16428]/10 transition text-sm">Prev</button>
-          <div className="px-3 py-1.5 rounded-lg bg-[#272121]/70 text-[#F6E9E9] border border-[#E16428]/20 min-w-[140px] text-center text-sm">{monthName}</div>
-          <button onClick={goNextMonth} className="px-2.5 py-1.5 rounded-lg bg-[#1a1818]/70 border border-[#E16428]/30 text-[#F6E9E9] hover:bg-[#E16428]/10 transition text-sm">Next</button>
+        <div className="flex items-center gap-1.5 w-full sm:w-auto">
+          <button onClick={goPrevMonth} className="flex-[0.5] sm:flex-none h-[36px] px-2.5 py-0 rounded-lg bg-[#1a1818]/70 border border-[#E16428]/30 text-[#F6E9E9] hover:bg-[#E16428]/10 transition text-sm flex items-center justify-center leading-none box-border">Prev</button>
+          <div className="flex-[2] sm:flex-none h-10 sm:h-[36px] px-2.5 py-0 rounded-lg bg-[#272121]/70 text-[#F6E9E9] border border-[#E16428]/30 min-w-[140px] text-center text-sm flex items-center justify-center leading-none box-border">{monthName}</div>
+          <button onClick={goNextMonth} className="flex-[0.5] sm:flex-none h-[36px] px-2.5 py-0 rounded-lg bg-[#1a1818]/70 border border-[#E16428]/30 text-[#F6E9E9] hover:bg-[#E16428]/10 transition text-sm flex items-center justify-center leading-none box-border">Next</button>
         </div>
       </div>
 

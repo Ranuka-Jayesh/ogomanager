@@ -25,10 +25,22 @@ export const PaymentConfirmationModal: React.FC<PaymentConfirmationModalProps> =
   const [isFullPayment, setIsFullPayment] = useState(true);
 
   const handleCustomAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value;
-    if (value === '' || /^\d*\.?\d*$/.test(value)) {
-      setCustomAmount(value);
+    const rawValue = e.target.value;
+    // Allow clearing the input
+    if (rawValue === '') {
+      setCustomAmount('');
+      return;
     }
+    // Keep only digits and optional decimal point
+    const sanitized = rawValue.replace(/[^\d.]/g, '');
+    const parsed = parseFloat(sanitized);
+    if (isNaN(parsed)) {
+      setCustomAmount('');
+      return;
+    }
+    // Clamp between 0 and remainingBalance
+    const clamped = Math.max(0, Math.min(parsed, remainingBalance));
+    setCustomAmount(clamped.toString());
   };
 
   const handlePaymentTypeChange = (isFull: boolean) => {
@@ -43,8 +55,8 @@ export const PaymentConfirmationModal: React.FC<PaymentConfirmationModalProps> =
     if (isFullPayment) {
       onConfirm();
     } else {
-      const amount = parseFloat(customAmount);
-      if (amount > 0 && amount <= remainingBalance) {
+      const amount = parseFloat(customAmount || '0');
+      if (amount >= 0 && amount <= remainingBalance) {
         onConfirm(amount);
       }
     }
@@ -52,8 +64,9 @@ export const PaymentConfirmationModal: React.FC<PaymentConfirmationModalProps> =
 
   const isValidCustomAmount = () => {
     if (isFullPayment) return true;
+    if (customAmount === '') return false;
     const amount = parseFloat(customAmount);
-    return amount > 0 && amount <= remainingBalance;
+    return amount >= 0 && amount <= remainingBalance;
   };
 
   const getNewAdvanceAmount = () => {
@@ -168,7 +181,10 @@ export const PaymentConfirmationModal: React.FC<PaymentConfirmationModalProps> =
                   <div className="relative">
                     <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[#E16428] font-medium text-sm">LKR</span>
                     <input
-                      type="text"
+                      type="number"
+                      min={0}
+                      max={remainingBalance}
+                      step="0.01"
                       value={customAmount}
                       onChange={handleCustomAmountChange}
                       placeholder="Enter amount"

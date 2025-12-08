@@ -1,11 +1,11 @@
 import React, { useRef, useEffect } from 'react';
 import { X } from 'lucide-react';
 import jsPDF from 'jspdf';
-import { Chart, ArcElement, BarElement, CategoryScale, LinearScale, Tooltip, Legend, PieController, LineElement, PointElement } from 'chart.js';
+import { Chart, ArcElement, BarElement, CategoryScale, LinearScale, Tooltip, Legend, PieController, LineElement, PointElement, LineController, Filler } from 'chart.js';
 import { Project, Employee } from '../types';
 import { supabase } from '../supabaseClient';
 
-Chart.register(ArcElement, BarElement, CategoryScale, LinearScale, Tooltip, Legend, PieController, LineElement, PointElement);
+Chart.register(ArcElement, BarElement, CategoryScale, LinearScale, Tooltip, Legend, PieController, LineElement, PointElement, LineController, Filler);
 
 import type {} from 'chart.js';
 
@@ -16,6 +16,23 @@ interface ReportModalProps {
   employees: Employee[];
   month: number | 'all';
   year: number | 'all';
+  monthlyChartData?: Record<number, {
+    revenue: number;
+    profit: number;
+    employeePayments: number;
+    projectCount: number;
+    completedCount: number;
+    uniqueClients: number;
+  }>;
+  chartYear?: number | 'all';
+  chartPeriod?: 'yearly' | 'monthly' | 'daily';
+  dailyChartData?: Record<number, {
+    revenue: number;
+    profit: number;
+    employeePayments: number;
+    projectCount: number;
+    uniqueClients: number;
+  }> | null;
 }
 
 interface MonthlyData {
@@ -27,12 +44,20 @@ interface MonthlyData {
   profit: number;
 }
 
-export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, projects, employees, month, year }) => {
+export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, projects, employees, month, year, monthlyChartData, chartPeriod = 'daily', dailyChartData }) => {
   const reportRef = useRef<HTMLDivElement>(null);
   const [, setProjectTypes] = React.useState<{ id: string; name: string }[]>([]);
   const now = new Date();
   const monthName = month === 'all' ? 'All Months' : new Date(0, month as number).toLocaleString('default', { month: 'long' });
   const yearName = year === 'all' ? 'All Years' : year;
+  
+  // Chart refs for PDF export
+  const revenueChartRef = useRef<HTMLCanvasElement>(null);
+  const profitChartRef = useRef<HTMLCanvasElement>(null);
+  const employeePaymentsChartRef = useRef<HTMLCanvasElement>(null);
+  const projectTrendsChartRef = useRef<HTMLCanvasElement>(null);
+  const uniqueClientsChartRef = useRef<HTMLCanvasElement>(null);
+  const chartInstancesRef = useRef<{ revenue?: Chart; profit?: Chart; employeePayments?: Chart; projectTrends?: Chart; uniqueClients?: Chart }>({});
 
   // Authentication state
   const [showAuthModal, setShowAuthModal] = React.useState(false);
@@ -139,6 +164,172 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
     orgStats[p.clientUniOrg].avgValue = orgStats[p.clientUniOrg].revenue / orgStats[p.clientUniOrg].count;
   });
   const bestOrg = Object.entries(orgStats).sort((a, b) => b[1].revenue - a[1].revenue)[0];
+
+  // Prepare top clients array (sorted by revenue desc, take top 5)
+  const topClients = Object.entries(orgStats)
+    .sort((a, b) => b[1].revenue - a[1].revenue)
+    .slice(0, 5)
+    .map(([name, stats]) => ({
+      name,
+      revenue: stats.revenue,
+      projectCount: stats.count,
+      averageValue: stats.avgValue,
+    }));
+
+  // Helper: persist export summary to database
+  const saveExportSummary = async () => {
+    try {
+      // Determine numeric year/month for the export record
+      let exportYear: number;
+      let exportMonth: number;
+
+      if (year !== 'all') {
+        exportYear = year as number;
+      } else {
+        exportYear = now.getFullYear();
+      }
+
+      if (month !== 'all') {
+        exportMonth = (month as number) + 1; // UI month is 0-based, DB is 1-12
+      } else {
+        // When 'all' months selected, use 0 as a special value meaning 'all months'
+        exportMonth = 0;
+      }
+
+      const { error } = await supabase.from('export_reports').upsert(
+        {
+          year: exportYear,
+          month: exportMonth,
+          total_revenue: totalRevenue,
+          total_profit: profit,
+          completion_rate: completionRate,
+          employee_payments: totalEmployeePayments,
+          top_clients: topClients,
+        },
+        {
+          onConflict: 'year,month',
+        }
+      );
+
+      if (error) {
+        console.error('Failed to save export summary:', error);
+      }
+    } catch (err) {
+      console.error('Unexpected error while saving export summary:', err);
+    }
+  };
+
+  // Helper: compute KPI values for a given month (1-12) and year from DB
+  const computeMonthlyKpis = async (targetYear: number, targetMonth: number) => {
+    try {
+      const startDate = new Date(targetYear, targetMonth - 1, 1);
+      const endDate = new Date(targetYear, targetMonth, 1);
+
+      const { data, error } = await supabase
+        .from('projects')
+        .select('price, payment_of_emp, client_name, created_at')
+        .gte('created_at', startDate.toISOString())
+        .lt('created_at', endDate.toISOString());
+
+      if (error || !data) {
+        if (error) console.error('Failed to fetch monthly KPIs:', error);
+        return {
+          revenue: 0,
+          profit: 0,
+          employeePayments: 0,
+          uniqueClients: 0,
+        };
+      }
+
+      let revenue = 0;
+      let employeePayments = 0;
+      const clients = new Set<string>();
+
+      data.forEach((p: any) => {
+        const price = typeof p.price === 'number' ? p.price : parseFloat(p.price || '0');
+        const pay = typeof p.payment_of_emp === 'number' ? p.payment_of_emp : parseFloat(p.payment_of_emp || '0');
+        revenue += isNaN(price) ? 0 : price;
+        employeePayments += isNaN(pay) ? 0 : pay;
+        if (p.client_name) {
+          clients.add(p.client_name);
+        }
+      });
+
+      const profitValue = revenue - employeePayments;
+
+      return {
+        revenue,
+        profit: profitValue,
+        employeePayments,
+        uniqueClients: clients.size,
+      };
+    } catch (err) {
+      console.error('Unexpected error while computing monthly KPIs:', err);
+      return {
+        revenue: 0,
+        profit: 0,
+        employeePayments: 0,
+        uniqueClients: 0,
+      };
+    }
+  };
+
+  // Helper: persist KPI percentage changes to analytics_comparison table
+  const saveAnalyticsComparison = async () => {
+    try {
+      // Only save when a specific month and year are selected
+      if (month === 'all' || year === 'all') {
+        return;
+      }
+
+      const exportYear = year as number;
+      const exportMonth = (month as number) + 1; // UI month is 0-based
+
+      // Determine previous month/year
+      const prevDate = new Date(exportYear, exportMonth - 2, 1); // JS months are 0-based
+      const prevYear = prevDate.getFullYear();
+      const prevMonth = prevDate.getMonth() + 1;
+
+      const currentKpis = await computeMonthlyKpis(exportYear, exportMonth);
+      const prevKpis = await computeMonthlyKpis(prevYear, prevMonth);
+
+      const calcChange = (current: number, prev: number) => {
+        if (!prev || prev === 0) return null;
+        return ((current - prev) / prev) * 100;
+      };
+
+      const revenueChange = calcChange(currentKpis.revenue, prevKpis.revenue);
+      const profitChange = calcChange(currentKpis.profit, prevKpis.profit);
+      const employeePaymentsChange = calcChange(currentKpis.employeePayments, prevKpis.employeePayments);
+      const uniqueClientsChange = calcChange(currentKpis.uniqueClients, prevKpis.uniqueClients);
+
+      const currentMargin = currentKpis.revenue > 0 ? (currentKpis.profit / currentKpis.revenue) * 100 : 0;
+      const prevMargin = prevKpis.revenue > 0 ? (prevKpis.profit / prevKpis.revenue) * 100 : 0;
+      const profitMarginChange =
+        prevKpis.revenue > 0 ? ((currentMargin - prevMargin) / prevMargin) * 100 : null;
+
+      const { error } = await supabase.from('analytics_comparison').upsert(
+        {
+          year: exportYear,
+          month: exportMonth,
+          revenue_change_percentage: revenueChange,
+          profit_change_percentage: profitChange,
+          profit_margin_change_percentage: profitMarginChange,
+          employee_payments_change_percentage: employeePaymentsChange,
+          unique_clients_change_percentage: uniqueClientsChange,
+        },
+        {
+          onConflict: 'year,month',
+        }
+      );
+
+      if (error) {
+        console.error('Failed to save analytics comparison:', error);
+      }
+    } catch (err) {
+      console.error('Unexpected error while saving analytics comparison:', err);
+    }
+  };
 
   // Authentication function
   const authenticateAdmin = async (password: string) => {
@@ -347,6 +538,11 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
     
     // Revenue Trend Analysis
     if (revenueTrend.length > 0) {
+      if (yPosition > pageHeight - 60) {
+        pdf.addPage();
+        yPosition = margin;
+      }
+
       pdf.setFont('helvetica', 'bold');
       pdf.setFontSize(14);
       pdf.setTextColor(30, 30, 30);
@@ -615,6 +811,77 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
       yPosition += 10;
     }
     
+    // Annual Trends Charts Section - After Client Performance Analysis
+    if (monthlyChartData && Object.keys(monthlyChartData).length > 0 && chartInstancesRef.current.revenue) {
+      // Wait for charts to be fully rendered
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      if (yPosition > pageHeight - 80) {
+        pdf.addPage();
+        yPosition = margin;
+      }
+
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(14);
+      pdf.setTextColor(30, 30, 30);
+      
+      let chartTitle = '';
+      if (chartPeriod === 'daily' && month !== 'all' && year !== 'all') {
+        // Daily view - show month and year
+        const monthName = new Date(0, month as number).toLocaleString('default', { month: 'long' });
+        chartTitle = `Month Trends - ${monthName} ${year}`;
+      } else if (chartPeriod === 'monthly' && year !== 'all') {
+        // Monthly view - show year
+        chartTitle = `Monthly Trends - ${year}`;
+      } else {
+        // Yearly view - show all years
+        chartTitle = 'Annual Trends';
+      }
+      
+      pdf.text(chartTitle, margin, yPosition);
+      yPosition += 10;
+
+      // Helper function to add chart to PDF with high resolution
+      const addChartToPDF = (chartInstance: Chart | undefined, chartTitle: string): void => {
+        if (!chartInstance || !chartInstance.canvas) {
+          console.warn(`Chart ${chartTitle} not available`);
+          return;
+        }
+
+        try {
+          // Export at maximum quality (PNG format with full quality)
+          const chartDataUrl = chartInstance.toBase64Image('image/png', 1.0);
+          
+          if (yPosition > pageHeight - 70) {
+            pdf.addPage();
+            yPosition = margin;
+          }
+
+          // Chart title
+          pdf.setFont('helvetica', 'bold');
+          pdf.setFontSize(12);
+          pdf.setTextColor(30, 30, 30);
+          pdf.text(chartTitle, margin, yPosition);
+          yPosition += 6;
+
+          // Add chart image with larger size for better clarity
+          const chartWidth = pageWidth - (margin * 2);
+          const chartHeight = 65; // Increased height for better visibility and clarity
+          pdf.addImage(chartDataUrl, 'PNG', margin, yPosition, chartWidth, chartHeight, undefined, 'NONE');
+          yPosition += chartHeight + 10;
+        } catch (error) {
+          console.error(`Error adding ${chartTitle} chart to PDF:`, error);
+        }
+      };
+
+      // Add all 5 charts
+      addChartToPDF(chartInstancesRef.current.revenue, 'Revenue Trend');
+      addChartToPDF(chartInstancesRef.current.profit, 'Profit Trend');
+      addChartToPDF(chartInstancesRef.current.employeePayments, 'Employee Payments Trend');
+      addChartToPDF(chartInstancesRef.current.projectTrends, 'Project Trends');
+      addChartToPDF(chartInstancesRef.current.uniqueClients, 'Unique Clients Trend');
+    }
+    
     // Key Insights and Recommendations
     if (yPosition > pageHeight - 80) {
       pdf.addPage();
@@ -681,6 +948,12 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
     
     // Log successful export
     await logAction(null, 'Admin', 'export_success');
+
+    // Persist export summary in database
+    await saveExportSummary();
+
+    // Persist KPI percentage comparison data
+    await saveAnalyticsComparison();
   };
 
   // Handle export button click (triggers authentication)
@@ -698,10 +971,297 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
     fetchProjectTypes();
   }, []);
 
+  // Render charts when modal opens and data is available
+  useEffect(() => {
+    if (!open || !monthlyChartData) return;
+
+    // Determine which view to show based on chartPeriod
+    const isDailyView = chartPeriod === 'daily' && dailyChartData && month !== 'all' && year !== 'all';
+    const isMonthlyView = chartPeriod === 'monthly' && year !== 'all';
+    
+    let labels: string[] = [];
+    let revenueData: number[] = [];
+    let profitData: number[] = [];
+    let employeePaymentsData: number[] = [];
+    let projectTrendsData: number[] = [];
+    let uniqueClientsData: number[] = [];
+
+    if (isDailyView) {
+      // Daily view - use day-wise data for selected month
+      const yearNum = year as number;
+      const monthIndex = month as number;
+      const daysInMonth = new Date(yearNum, monthIndex + 1, 0).getDate();
+      
+      labels = Array.from({ length: daysInMonth }, (_, i) => (i + 1).toString());
+      revenueData = Array.from({ length: daysInMonth }, (_, i) => dailyChartData![i + 1]?.revenue ?? 0);
+      profitData = Array.from({ length: daysInMonth }, (_, i) => dailyChartData![i + 1]?.profit ?? 0);
+      employeePaymentsData = Array.from({ length: daysInMonth }, (_, i) => dailyChartData![i + 1]?.employeePayments ?? 0);
+      projectTrendsData = Array.from({ length: daysInMonth }, (_, i) => dailyChartData![i + 1]?.projectCount ?? 0);
+      uniqueClientsData = Array.from({ length: daysInMonth }, (_, i) => dailyChartData![i + 1]?.uniqueClients ?? 0);
+    } else if (isMonthlyView) {
+      // Monthly view - use month-wise data for selected year
+      labels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      revenueData = Array.from({ length: 12 }, (_, i) => monthlyChartData[i]?.revenue ?? 0);
+      profitData = Array.from({ length: 12 }, (_, i) => monthlyChartData[i]?.profit ?? 0);
+      employeePaymentsData = Array.from({ length: 12 }, (_, i) => monthlyChartData[i]?.employeePayments ?? 0);
+      projectTrendsData = Array.from({ length: 12 }, (_, i) => monthlyChartData[i]?.projectCount ?? 0);
+      uniqueClientsData = Array.from({ length: 12 }, (_, i) => monthlyChartData[i]?.uniqueClients ?? 0);
+    } else {
+      // Yearly view - use year-wise data (all years)
+      // Calculate yearly data from projects
+      const yearlyData: Record<number, {
+        revenue: number;
+        profit: number;
+        employeePayments: number;
+        projectCount: number;
+        uniqueClients: Set<string>;
+      }> = {};
+
+      projects.forEach(project => {
+        if (!project.createdAt) return;
+        const created = new Date(project.createdAt);
+        const projectYear = created.getFullYear();
+
+        if (!yearlyData[projectYear]) {
+          yearlyData[projectYear] = {
+            revenue: 0,
+            profit: 0,
+            employeePayments: 0,
+            projectCount: 0,
+            uniqueClients: new Set<string>(),
+          };
+        }
+
+        yearlyData[projectYear].revenue += project.price;
+        yearlyData[projectYear].employeePayments += project.paymentOfEmp;
+        yearlyData[projectYear].profit += (project.price - project.paymentOfEmp);
+        yearlyData[projectYear].projectCount += 1;
+        const clientKey = `${project.clientName}|${project.clientUniOrg}`;
+        yearlyData[projectYear].uniqueClients.add(clientKey);
+      });
+
+      // Calculate new unique clients per year (excluding previous years)
+      const sortedYears = Object.keys(yearlyData).map(Number).sort((a, b) => a - b);
+      const previousYearsClients = new Set<string>();
+      const yearlyUniqueClients: Record<number, number> = {};
+      
+      sortedYears.forEach(year => {
+        const currentYearClients = yearlyData[year].uniqueClients;
+        let newClientsCount = 0;
+        
+        currentYearClients.forEach(clientKey => {
+          if (!previousYearsClients.has(clientKey)) {
+            newClientsCount++;
+          }
+        });
+        
+        // Add all clients from current year to previous years set
+        currentYearClients.forEach(clientKey => {
+          previousYearsClients.add(clientKey);
+        });
+        
+        yearlyUniqueClients[year] = newClientsCount;
+      });
+
+      labels = sortedYears.map(y => y.toString());
+      revenueData = sortedYears.map(y => yearlyData[y]?.revenue ?? 0);
+      profitData = sortedYears.map(y => yearlyData[y]?.profit ?? 0);
+      employeePaymentsData = sortedYears.map(y => yearlyData[y]?.employeePayments ?? 0);
+      projectTrendsData = sortedYears.map(y => yearlyData[y]?.projectCount ?? 0);
+      uniqueClientsData = sortedYears.map(y => yearlyUniqueClients[y] ?? 0);
+    }
+    
+    // Destroy existing charts
+    Object.values(chartInstancesRef.current).forEach(chart => {
+      if (chart) chart.destroy();
+    });
+    chartInstancesRef.current = {};
+
+    // Helper function to create a chart with high resolution settings
+    const createChart = (
+      canvasRef: React.RefObject<HTMLCanvasElement>,
+      label: string,
+      data: number[],
+      color: string,
+      backgroundColor: string,
+      chartLabels: string[]
+    ): Chart | null => {
+      if (!canvasRef.current) return null;
+
+      const ctx = canvasRef.current.getContext('2d');
+      if (!ctx) return null;
+
+      return new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: chartLabels,
+          datasets: [{
+            label: label,
+            data: data,
+            borderColor: color,
+            backgroundColor: backgroundColor,
+            borderWidth: 6, // Increased for high res
+            tension: 0.4,
+            fill: true,
+            pointRadius: 10, // Increased for high res
+            pointHoverRadius: 14,
+            pointBackgroundColor: color,
+            pointBorderColor: '#fff',
+            pointBorderWidth: 4,
+          }]
+        },
+        options: {
+          responsive: false, // Fixed size for high res
+          maintainAspectRatio: false,
+          devicePixelRatio: 2, // Higher DPI for clarity
+          plugins: {
+            legend: {
+              display: true,
+              position: 'top',
+              labels: {
+                color: '#000000', // Black text
+                font: {
+                  family: 'Inter',
+                  size: 24, // Scaled up for high res
+                  weight: 'bold'
+                },
+                padding: 30,
+                usePointStyle: true,
+              }
+            },
+            tooltip: {
+              backgroundColor: 'rgba(255, 255, 255, 0.95)',
+              titleColor: '#000000', // Black text
+              bodyColor: '#000000', // Black text
+              borderColor: '#E16428',
+              borderWidth: 2,
+              padding: 24,
+              displayColors: true,
+              titleFont: {
+                size: 20
+              },
+              bodyFont: {
+                size: 18
+              },
+              callbacks: {
+                label: function(context) {
+                  if (label === 'Project Count') {
+                    return `${context.dataset.label}: ${context.parsed.y} projects`;
+                  }
+                  if (label === 'Unique Clients') {
+                    return `${context.dataset.label}: ${context.parsed.y} clients`;
+                  }
+                  return `${context.dataset.label}: LKR ${context.parsed.y.toLocaleString()}`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              ticks: {
+                color: '#000000', // Black text
+                font: {
+                  family: 'Inter',
+                  size: 20 // Scaled up for high res
+                }
+              },
+              grid: {
+                color: 'rgba(0, 0, 0, 0.1)',
+                lineWidth: 2
+              }
+            },
+            y: {
+              ticks: {
+                color: '#000000', // Black text
+                font: {
+                  family: 'Inter',
+                  size: 20 // Scaled up for high res
+                },
+                callback: function(value) {
+                  if (label === 'Project Count' || label === 'Unique Clients') {
+                    return Number(value).toString();
+                  }
+                  return 'LKR ' + Number(value).toLocaleString();
+                }
+              },
+              grid: {
+                color: 'rgba(0, 0, 0, 0.1)',
+                lineWidth: 2
+              },
+              beginAtZero: true
+            }
+          }
+        }
+      });
+    };
+
+    // Create all 5 charts
+    chartInstancesRef.current.revenue = createChart(
+      revenueChartRef,
+      'Revenue',
+      revenueData,
+      '#E16428',
+      'rgba(225, 100, 40, 0.1)',
+      labels
+    ) || undefined;
+
+    chartInstancesRef.current.profit = createChart(
+      profitChartRef,
+      'Profit',
+      profitData,
+      '#10b981',
+      'rgba(16, 185, 129, 0.1)',
+      labels
+    ) || undefined;
+
+    chartInstancesRef.current.employeePayments = createChart(
+      employeePaymentsChartRef,
+      'Employee Payments',
+      employeePaymentsData,
+      '#3b82f6',
+      'rgba(59, 130, 246, 0.1)',
+      labels
+    ) || undefined;
+
+    chartInstancesRef.current.projectTrends = createChart(
+      projectTrendsChartRef,
+      'Project Count',
+      projectTrendsData,
+      '#8b5cf6',
+      'rgba(139, 92, 246, 0.1)',
+      labels
+    ) || undefined;
+
+    chartInstancesRef.current.uniqueClients = createChart(
+      uniqueClientsChartRef,
+      'Unique Clients',
+      uniqueClientsData,
+      '#06b6d4',
+      'rgba(6, 182, 212, 0.1)',
+      labels
+    ) || undefined;
+
+    return () => {
+      Object.values(chartInstancesRef.current).forEach(chart => {
+        if (chart) chart.destroy();
+      });
+      chartInstancesRef.current = {};
+    };
+  }, [open, monthlyChartData, dailyChartData, chartPeriod, month, year, projects]);
+
   if (!open) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn">
+      {/* Hidden chart canvases for PDF export - positioned off-screen but visible to browser - Higher resolution for clarity */}
+      <div style={{ position: 'absolute', left: '-9999px', top: '-9999px', width: '1600px', height: '800px', pointerEvents: 'none' }}>
+        <canvas ref={revenueChartRef} width={1600} height={800} style={{ display: 'block' }}></canvas>
+        <canvas ref={profitChartRef} width={1600} height={800} style={{ display: 'block' }}></canvas>
+        <canvas ref={employeePaymentsChartRef} width={1600} height={800} style={{ display: 'block' }}></canvas>
+        <canvas ref={projectTrendsChartRef} width={1600} height={800} style={{ display: 'block' }}></canvas>
+        <canvas ref={uniqueClientsChartRef} width={1600} height={800} style={{ display: 'block' }}></canvas>
+      </div>
+
       <div className="bg-[#1a1818] rounded-2xl shadow-2xl max-w-4xl w-full mx-4 p-8 overflow-y-auto max-h-[90vh] relative" ref={reportRef}>
         {/* Close Button */}
         <button onClick={onClose} className="absolute top-4 right-4 p-2 bg-[#272121]/60 text-[#F6E9E9] rounded-lg hover:bg-[#E16428]/20 transition-all duration-300">
