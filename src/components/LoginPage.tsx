@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabase } from '../supabaseClient';
-import { Mail, Lock, LogIn, Triangle, Eye, EyeOff } from 'lucide-react';
+import { Mail, Lock, LogIn, Triangle, Eye, EyeOff, Fingerprint } from 'lucide-react';
+import { useBiometricAuth } from '../hooks/useBiometricAuth';
 
 interface LoginPageProps {
   onLoginSuccess: (email: string) => void;
@@ -12,6 +13,58 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  
+  // Biometric authentication (mobile only)
+  const { 
+    isSupported, 
+    hasCredentials, 
+    registerBiometric, 
+    authenticateBiometric 
+  } = useBiometricAuth();
+  const [showBiometricOption, setShowBiometricOption] = useState(false);
+
+  // Check if biometric option should be shown
+  useEffect(() => {
+    setShowBiometricOption(isSupported && hasCredentials);
+  }, [isSupported, hasCredentials]);
+
+  // Handle biometric authentication
+  const handleBiometricLogin = async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      const authenticatedEmail = await authenticateBiometric();
+      
+      if (authenticatedEmail) {
+        // Verify user exists in database
+        const { data: admin, error: adminError } = await supabase
+          .from('admin')
+          .select('*')
+          .eq('email', authenticatedEmail)
+          .single();
+
+        if (adminError || !admin) {
+          throw new Error('Biometric authentication failed. User not found.');
+        }
+
+        // Log successful biometric login
+        await supabase.from('log').insert({
+          admin_id: admin.id,
+          admin_email: authenticatedEmail,
+          action: 'login_success_biometric',
+        });
+
+        onLoginSuccess(authenticatedEmail);
+      } else {
+        setError('Biometric authentication cancelled or failed.');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Biometric authentication failed.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,6 +103,26 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
 
       // 4. Handle successful login
       onLoginSuccess(email);
+
+      // 5. Offer to register biometric on mobile (if supported and not already registered)
+      if (isSupported && !hasCredentials) {
+        // Small delay to ensure login completes
+        setTimeout(async () => {
+          const enableBiometric = window.confirm(
+            'Would you like to enable fingerprint/face ID login for faster access?'
+          );
+          
+          if (enableBiometric) {
+            const success = await registerBiometric(email, admin.id);
+            if (success) {
+              setShowBiometricOption(true);
+              alert('Biometric authentication enabled! You can use it next time you log in.');
+            } else {
+              alert('Failed to enable biometric authentication. You can try again later.');
+            }
+          }
+        }, 500);
+      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -132,6 +205,28 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
           {error && (
             <div className="text-center text-red-400 bg-red-500/10 p-3 rounded-lg border border-red-500/20">
               {error}
+            </div>
+          )}
+
+          {/* Biometric Login Button (Mobile Only) */}
+          {showBiometricOption && (
+            <button
+              type="button"
+              onClick={handleBiometricLogin}
+              disabled={loading}
+              className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-gradient-to-r from-[#E16428]/80 to-[#d35400]/80 text-white font-bold rounded-lg shadow-lg hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300 focus:outline-none focus:ring-4 focus:ring-[#E16428]/50 mb-2"
+            >
+              <Fingerprint className="w-5 h-5" />
+              <span>Use Fingerprint / Face ID</span>
+            </button>
+          )}
+
+          {/* Divider (Mobile Only) */}
+          {showBiometricOption && (
+            <div className="flex items-center gap-2 my-2">
+              <div className="flex-1 h-px bg-[#E16428]/30"></div>
+              <span className="text-[#F6E9E9]/50 text-sm">OR</span>
+              <div className="flex-1 h-px bg-[#E16428]/30"></div>
             </div>
           )}
 

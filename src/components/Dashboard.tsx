@@ -60,7 +60,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
       return sum + balance;
     }, 0);
 
-  // Manual refresh functionality (no auto-refresh)
+  // Manual refresh functionality
   const handleRefresh = useCallback(async () => {
     if (onRefresh && !isRefreshing) {
       setIsRefreshing(true);
@@ -75,6 +75,47 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
       }
     }
   }, [onRefresh, isRefreshing, setLastRefresh]);
+
+  // Auto-refresh when component mounts (when navigating to dashboard)
+  useEffect(() => {
+    // Small delay to ensure component is fully mounted
+    const timer = setTimeout(() => {
+      handleRefresh();
+    }, 100);
+    return () => clearTimeout(timer);
+  }, []); // Only run on mount
+
+  // Refresh when window gains focus (user returns to the tab/app)
+  useEffect(() => {
+    const handleFocus = () => {
+      handleRefresh();
+    };
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        handleRefresh();
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [handleRefresh]);
+
+  // Periodic refresh every 30 seconds when dashboard is active
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!document.hidden) {
+        handleRefresh();
+      }
+    }, 30000); // 30 seconds
+
+    return () => clearInterval(interval);
+  }, [handleRefresh]);
 
   React.useEffect(() => {
     async function fetchTypes() {

@@ -4,6 +4,7 @@ import { Employee } from '../types';
 import { GlassCard } from './GlassCard';
 import { EmployeeModal } from './EmployeeModal';
 import { supabase } from '../supabaseClient';
+import { useMobileNotifications } from '../hooks/useMobileNotifications';
 
 interface EmployeeManagementProps {
   // No longer need employees, add, update, delete as props
@@ -53,6 +54,7 @@ function getAge(birthday: string) {
 }
 
 export const EmployeeManagement: React.FC<EmployeeManagementProps> = () => {
+  const { showNotification } = useMobileNotifications();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -75,6 +77,15 @@ export const EmployeeManagement: React.FC<EmployeeManagementProps> = () => {
     const { data, error } = await supabase.from('employees').insert([toSupabaseEmployee(employee)]).select();
     if (!error && data && data[0]) {
       setEmployees(prev => [...prev, fromSupabaseEmployee(data[0])]);
+      showNotification(`Employee ${employee.firstName} ${employee.lastName} added successfully`, 'success', {
+        title: 'Manager Pro',
+        icon: '/app.png'
+      });
+    } else if (error) {
+      showNotification(`Failed to add employee: ${error.message}`, 'error', {
+        title: 'Manager Pro',
+        icon: '/app.png'
+      });
     }
   };
 
@@ -88,13 +99,34 @@ export const EmployeeManagement: React.FC<EmployeeManagementProps> = () => {
       setEmployees(prev =>
         prev.map(emp => (emp.id === id ? fromSupabaseEmployee(data[0]) : emp))
       );
+      showNotification(`Employee ${updates.firstName} ${updates.lastName} updated successfully`, 'success', {
+        title: 'Manager Pro',
+        icon: '/app.png'
+      });
+    } else if (error) {
+      showNotification(`Failed to update employee: ${error.message}`, 'error', {
+        title: 'Manager Pro',
+        icon: '/app.png'
+      });
     }
   };
 
   const deleteEmployee = async (id: any) => {
+    const employee = employees.find(emp => emp.id === id);
     const { error } = await supabase.from('employees').delete().eq('id', id);
     if (!error) {
       setEmployees(prev => prev.filter(emp => emp.id !== id));
+      if (employee) {
+        showNotification(`Employee ${employee.firstName} ${employee.lastName} deleted successfully`, 'info', {
+          title: 'Manager Pro',
+          icon: '/app.png'
+        });
+      }
+    } else {
+      showNotification(`Failed to delete employee: ${error.message}`, 'error', {
+        title: 'Manager Pro',
+        icon: '/app.png'
+      });
     }
   };
 

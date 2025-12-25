@@ -4,32 +4,32 @@
   "description": "Online sales management system",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#1a1818",
+  "background_color": "#000000",
   "theme_color": "#E16428",
   "orientation": "portrait-primary",
   "icons": [
     {
-      "src": "/Logo.jpg",
+      "src": "/app.png",
       "sizes": "96x96",
-      "type": "image/jpeg",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/Logo.jpg",
+      "src": "/app.png",
       "sizes": "144x144",
-      "type": "image/jpeg",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/Logo.jpg",
+      "src": "/app.png",
       "sizes": "192x192",
-      "type": "image/jpeg",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/Logo.jpg",
+      "src": "/app.png",
       "sizes": "512x512",
-      "type": "image/jpeg",
+      "type": "image/png",
       "purpose": "any maskable"
     }
   ]

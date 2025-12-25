@@ -254,7 +254,7 @@ export const Navigation: React.FC<NavigationProps> = ({
             <span className="font-medium">Logout</span>
           </button>
           <p className="text-xs text-center text-[#F6E9E9]/50 font-['Poppins']">
-            ogo manager V.06
+            ogo manager V.10
           </p>
           <p className="text-xs text-center text-[#F6E9E9]/30 font-['Poppins'] mt-1">
             2025

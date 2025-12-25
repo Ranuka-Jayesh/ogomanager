@@ -11,9 +11,11 @@ import { LoginPage } from "./components/LoginPage";
 import { useProjects } from "./hooks/useProjects";
 import { useEmployees } from "./hooks/useEmployees";
 import { supabase } from "./supabaseClient";
-import { LogOut } from "lucide-react";
+import { LogOut, Fingerprint } from "lucide-react";
 import LoadingScreen from "./components/LoadingScreen";
 import { LastRefreshProvider } from "./contexts/LastRefreshContext";
+import { useMobileNotifications } from "./hooks/useMobileNotifications";
+import { useBiometricAuth } from "./hooks/useBiometricAuth";
 
 interface SessionData {
   email: string;
@@ -33,6 +35,64 @@ export function App() {
 
   const { projects, refetch: refetchProjects } = useProjects();
   const { employees, refetch: refetchEmployees } = useEmployees();
+  const { requestPermission } = useMobileNotifications();
+  const { isSupported, hasCredentials, authenticateBiometric } = useBiometricAuth();
+  
+  const [showBiometricPrompt, setShowBiometricPrompt] = useState(false);
+  const [pendingSession, setPendingSession] = useState<SessionData | null>(null);
+
+  // Request notification permission on mobile devices when authenticated
+  useEffect(() => {
+    if (isAuthenticated) {
+      // Request permission after a short delay to ensure user interaction context
+      const timer = setTimeout(() => {
+        requestPermission();
+      }, 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [isAuthenticated, requestPermission]);
+
+  // Handle biometric authentication on app reopen
+  const handleBiometricAuth = async () => {
+    if (!pendingSession) return;
+
+    try {
+      const authenticatedEmail = await authenticateBiometric();
+      
+      if (authenticatedEmail && authenticatedEmail === pendingSession.email) {
+        // Biometric successful, allow access
+        setIsAuthenticated(true);
+        setCurrentUserEmail(authenticatedEmail);
+        setShowBiometricPrompt(false);
+        setPendingSession(null);
+      } else {
+        // Biometric failed or cancelled, redirect to login
+        localStorage.removeItem('ogo_session');
+        setShowBiometricPrompt(false);
+        setPendingSession(null);
+        setIsAuthenticated(false);
+      }
+    } catch (error) {
+      console.error('Biometric authentication error:', error);
+      // On error, redirect to login
+      localStorage.removeItem('ogo_session');
+      setShowBiometricPrompt(false);
+      setPendingSession(null);
+      setIsAuthenticated(false);
+    }
+  };
+
+  // Auto-trigger biometric prompt when it shows
+  useEffect(() => {
+    if (showBiometricPrompt && isSupported && hasCredentials && pendingSession) {
+      // Small delay to ensure UI is ready
+      const timer = setTimeout(() => {
+        handleBiometricAuth();
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showBiometricPrompt, isSupported, hasCredentials, pendingSession]);
 
   // Check for existing session on app startup
   useEffect(() => {
@@ -47,8 +107,16 @@ export function App() {
 
           // Check if session is still valid (less than 24 hours old)
           if (sessionAge < maxSessionAge) {
-            setIsAuthenticated(true);
-            setCurrentUserEmail(session.email);
+            // Check if biometric is available and enabled (mobile only)
+            if (isSupported && hasCredentials) {
+              // Show biometric prompt instead of auto-login
+              setPendingSession(session);
+              setShowBiometricPrompt(true);
+            } else {
+              // No biometric, auto-login as before
+              setIsAuthenticated(true);
+              setCurrentUserEmail(session.email);
+            }
           } else {
             // Session expired, clear it
             localStorage.removeItem('ogo_session');
@@ -63,11 +131,31 @@ export function App() {
       }
     };
 
-    checkExistingSession();
+    // Wait a bit for biometric hook to initialize
+    const timer = setTimeout(() => {
+      checkExistingSession();
+    }, 100);
+    
     // Minimum 5 seconds loading
-    const timer = setTimeout(() => setMinLoadingDone(true), 5000);
-    return () => clearTimeout(timer);
-  }, []);
+    const minLoadingTimer = setTimeout(() => setMinLoadingDone(true), 5000);
+    
+    return () => {
+      clearTimeout(timer);
+      clearTimeout(minLoadingTimer);
+    };
+  }, [isSupported, hasCredentials]);
+
+  // Auto-trigger biometric prompt when it shows
+  useEffect(() => {
+    if (showBiometricPrompt && isSupported && hasCredentials && pendingSession) {
+      // Small delay to ensure UI is ready
+      const timer = setTimeout(() => {
+        handleBiometricAuth();
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showBiometricPrompt, isSupported, hasCredentials, pendingSession]);
 
   const createSession = (email: string) => {
     const sessionData: SessionData = {
@@ -174,10 +262,15 @@ export function App() {
   const renderPage = () => {
     switch (activeTab) {
       case "dashboard":
-        return <Dashboard projects={projects} employees={employees} onRefresh={() => {
-          refetchProjects();
-          refetchEmployees();
-        }} />;
+        return <Dashboard 
+          key="dashboard" 
+          projects={projects} 
+          employees={employees} 
+          onRefresh={() => {
+            refetchProjects();
+            refetchEmployees();
+          }} 
+        />;
       case "analytics":
         return <Analytics projects={projects} employees={employees} onRefresh={() => {
           refetchProjects();
@@ -230,6 +323,38 @@ export function App() {
           {renderPage()}
         </div>
       </main>
+
+      {/* Biometric Authentication Modal (Mobile Only) */}
+      {showBiometricPrompt && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm">
+          <div className="bg-[#272121]/95 border border-[#E16428]/30 rounded-2xl shadow-2xl p-8 max-w-md mx-4 animate-fadeIn">
+            <div className="text-center">
+              <div className="inline-block p-4 bg-[#E16428]/20 rounded-full mb-4 animate-pulse">
+                <Fingerprint className="w-12 h-12 text-[#E16428]" />
+              </div>
+              <h3 className="text-2xl font-bold text-[#F6E9E9] mb-2 font-['Playfair_Display']">
+                Unlock Manager Pro
+              </h3>
+              <p className="text-[#F6E9E9]/70 mb-6">
+                Please authenticate with your fingerprint or face ID to continue
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => {
+                    localStorage.removeItem('ogo_session');
+                    setShowBiometricPrompt(false);
+                    setPendingSession(null);
+                    setIsAuthenticated(false);
+                  }}
+                  className="flex-1 px-4 py-3 bg-[#1a1818]/80 border border-[#E16428]/30 rounded-lg text-[#F6E9E9] hover:bg-[#E16428]/10 hover:border-[#E16428] transition-all duration-300 font-medium"
+                >
+                  Use Password Instead
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Logout Confirmation Modal */}
       {showLogoutConfirm && (

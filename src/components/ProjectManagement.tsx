@@ -7,6 +7,7 @@ import { useProjects } from '../hooks/useProjects';
 import { ProjectReceiptModal } from './ProjectReceiptModal';
 import { PaymentConfirmationModal } from './PaymentConfirmationModal';
 import { supabase } from '../supabaseClient';
+import { useMobileNotifications } from '../hooks/useMobileNotifications';
 
 interface ProjectManagementProps {
   employees: Employee[];
@@ -16,6 +17,7 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
   employees,
 }) => {
   const { projects, loading, error, addProject, updateProject, deleteProject } = useProjects();
+  const { showNotification } = useMobileNotifications();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [filter, setFilter] = useState<string>('all');
@@ -274,16 +276,63 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
   };
 
   const handleSave = async (projectData: Omit<Project, 'id'>) => {
+    const previousError = error;
     if (editingProject && editingProject.id) {
       await updateProject(editingProject.id, projectData);
+      // Check if operation succeeded (no new error)
+      setTimeout(() => {
+        if (!error || error === previousError) {
+          showNotification(`Project ${projectData.projectId} updated successfully`, 'success', {
+            title: 'Manager Pro',
+            icon: '/app.png'
+          });
+        } else {
+          showNotification(`Failed to update project ${projectData.projectId}`, 'error', {
+            title: 'Manager Pro',
+            icon: '/app.png'
+          });
+        }
+      }, 100);
     } else {
       await addProject(projectData);
+      // Check if operation succeeded
+      setTimeout(() => {
+        if (!error || error === previousError) {
+          showNotification(`Project ${projectData.projectId} added successfully`, 'success', {
+            title: 'Manager Pro',
+            icon: '/app.png'
+          });
+        } else {
+          showNotification(`Failed to add project ${projectData.projectId}`, 'error', {
+            title: 'Manager Pro',
+            icon: '/app.png'
+          });
+        }
+      }, 100);
     }
     handleModalClose();
   };
 
   const handleDelete = async (id: string) => {
+    const project = projects.find(p => p.id === id);
+    const previousError = error;
     await deleteProject(id);
+    // Check if operation succeeded
+      setTimeout(() => {
+        if (project) {
+          if (!error || error === previousError) {
+            showNotification(`Project ${project.projectId} deleted successfully`, 'info', {
+              title: 'Manager Pro',
+              icon: '/app.png'
+            });
+          } else {
+            showNotification(`Failed to delete project ${project.projectId}`, 'error', {
+              title: 'Manager Pro',
+              icon: '/app.png'
+            });
+          }
+        }
+      }, 100);
   };
 
   const handleStatusChange = (projectId: string, newStatus: Project['status']) => {
@@ -302,11 +351,29 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
     }
     
     // For all other statuses or if no remaining balance, update directly
+    const project = projects.find(p => p.id === projectId);
+    const previousError = error;
     updateProject(projectId, { status: newStatus });
+    if (project) {
+      setTimeout(() => {
+        if (!error || error === previousError) {
+          showNotification(`Project ${project.projectId} status changed to ${newStatus}`, 'info', {
+            title: 'Manager Pro',
+            icon: '/app.png'
+          });
+        } else {
+          showNotification(`Failed to update project ${project.projectId} status`, 'error', {
+            title: 'Manager Pro',
+            icon: '/app.png'
+          });
+        }
+      }, 100);
+    }
   };
 
   const handlePaymentConfirmation = async (customAmount?: number) => {
     if (paymentConfirmationProject) {
+      const previousError = error;
       if (customAmount !== undefined) {
         // Partial payment - add custom amount to existing advance
         const newAdvance = paymentConfirmationProject.advance + customAmount;
@@ -318,6 +385,19 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
           advance: newAdvance,
           balance: newBalance
         });
+        setTimeout(() => {
+          if (!error || error === previousError) {
+            showNotification(`Payment of LKR ${customAmount.toFixed(2)} recorded for project ${paymentConfirmationProject.projectId}`, 'success', {
+              title: 'Manager Pro',
+              icon: '/app.png'
+            });
+          } else {
+            showNotification(`Failed to record payment for project ${paymentConfirmationProject.projectId}`, 'error', {
+              title: 'Manager Pro',
+              icon: '/app.png'
+            });
+          }
+        }, 100);
       } else {
         // Full payment - advance becomes equal to price, balance becomes 0
         await updateProject(paymentConfirmationProject.id, { 
@@ -325,6 +405,19 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
           advance: paymentConfirmationProject.price,
           balance: 0
         });
+        setTimeout(() => {
+          if (!error || error === previousError) {
+            showNotification(`Full payment received for project ${paymentConfirmationProject.projectId}`, 'success', {
+              title: 'Manager Pro',
+              icon: '/app.png'
+            });
+          } else {
+            showNotification(`Failed to record payment for project ${paymentConfirmationProject.projectId}`, 'error', {
+              title: 'Manager Pro',
+              icon: '/app.png'
+            });
+          }
+        }, 100);
       }
       setPaymentConfirmationProject(null);
     }
