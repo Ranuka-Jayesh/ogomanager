@@ -338,6 +338,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Made with ❤️ by OGO Technology Team**
 
-[🌐 Website](https://ogo.technology) • [📧 Contact](mailto:contact@ogo.technology) • [🐛 Report Bug](https://github.com/yourusername/ogo-manager/issues)
+[🌐 Website](https://ogotechnology.net) • [📧 Contact](mailto:info@ogotechnology,net) • [🐛 Report Bug](https://github.com/ranuka-jayesh/ogo-manager/issues)
 
 </div>
