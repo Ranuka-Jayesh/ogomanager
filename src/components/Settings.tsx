@@ -1,6 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { Edit, Trash2, Plus, Save, X, Lock, Layers } from 'lucide-react';
+import { useNetworkStatus } from '../hooks/useNetworkStatus';
+import {
+  getLocalProjectTypes,
+  saveProjectTypesLocally,
+  saveProjectTypeLocally,
+  markProjectTypeDeleted,
+  addToSyncQueue,
+  getSyncQueueCount,
+} from '../lib/offlineStore';
+import { syncManager } from '../lib/syncManager';
 
 const TABS = [
   { id: 'project-types', label: 'Project Types', icon: Layers },
@@ -9,6 +19,7 @@ const TABS = [
 
 export const Settings: React.FC = () => {
   const [activeTab, setActiveTab] = useState('project-types');
+  const { isOnline } = useNetworkStatus();
 
   // Project Types State
   const [projectTypes, setProjectTypes] = useState<{ id: string; name: string }[]>([]);
@@ -32,39 +43,136 @@ export const Settings: React.FC = () => {
     // eslint-disable-next-line
   }, [activeTab]);
 
+  // Subscribe to sync events to refresh data
+  useEffect(() => {
+    const unsubscribe = syncManager.subscribe((event) => {
+      if (event.type === 'sync-complete' || event.type === 'data-updated') {
+        fetchTypes(); // Refresh data after sync
+      }
+    });
+    
+    return unsubscribe;
+  }, []);
+
   async function fetchTypes() {
     setLoading(true);
-    const { data } = await supabase.from('project_types').select('*').order('created_at');
-    setProjectTypes(data || []);
+    
+    try {
+      if (isOnline) {
+        // Online: fetch from Supabase and cache locally
+        const { data, error } = await supabase.from('project_types').select('*').order('created_at');
+        if (!error && data) {
+          setProjectTypes(data);
+          await saveProjectTypesLocally(data);
+        } else {
+          // If online fetch fails, use local data
+          const localTypes = await getLocalProjectTypes();
+          setProjectTypes(localTypes.map(t => ({ id: t.id, name: t.name })));
+        }
+      } else {
+        // Offline: use local data
+        const localTypes = await getLocalProjectTypes();
+        setProjectTypes(localTypes.map(t => ({ id: t.id, name: t.name })));
+      }
+    } catch (error) {
+      console.error('Error fetching types:', error);
+      // Fallback to local data
+      const localTypes = await getLocalProjectTypes();
+      setProjectTypes(localTypes.map(t => ({ id: t.id, name: t.name })));
+    }
+    
     setLoading(false);
   }
 
   async function addType() {
     if (!newType.trim()) return;
-    const { error } = await supabase.from('project_types').insert({ name: newType.trim() });
-    if (!error) {
-      setNewType('');
-      fetchTypes();
+    
+    const newTypeData = {
+      id: crypto.randomUUID(),
+      name: newType.trim(),
+      created_at: new Date().toISOString(),
+    };
+    
+    try {
+      if (isOnline) {
+        // Online: insert directly
+        const { error } = await supabase.from('project_types').insert({ name: newType.trim() });
+        if (!error) {
+          setNewType('');
+          fetchTypes();
+        }
+      } else {
+        // Offline: save locally and queue for sync
+        await saveProjectTypeLocally(newTypeData, true);
+        await addToSyncQueue({
+          type: 'create',
+          table: 'project_types',
+          data: newTypeData,
+        });
+        setNewType('');
+        fetchTypes();
+      }
+    } catch (error) {
+      console.error('Error adding type:', error);
     }
   }
 
   async function updateType() {
     if (!editingType || !typeInput.trim()) return;
-    const { error } = await supabase
-      .from('project_types')
-      .update({ name: typeInput.trim() })
-      .eq('id', editingType.id);
-    if (!error) {
-      setEditingType(null);
-      setTypeInput('');
-      fetchTypes();
+    
+    const updatedData = {
+      id: editingType.id,
+      name: typeInput.trim(),
+    };
+    
+    try {
+      if (isOnline) {
+        // Online: update directly
+        const { error } = await supabase
+          .from('project_types')
+          .update({ name: typeInput.trim() })
+          .eq('id', editingType.id);
+        if (!error) {
+          setEditingType(null);
+          setTypeInput('');
+          fetchTypes();
+        }
+      } else {
+        // Offline: save locally and queue for sync
+        await saveProjectTypeLocally(updatedData, true);
+        await addToSyncQueue({
+          type: 'update',
+          table: 'project_types',
+          data: updatedData,
+        });
+        setEditingType(null);
+        setTypeInput('');
+        fetchTypes();
+      }
+    } catch (error) {
+      console.error('Error updating type:', error);
     }
   }
 
   async function handleDeleteType(id: string) {
-    await supabase.from('project_types').delete().eq('id', id);
-    setShowDeleteModal(null);
-    fetchTypes();
+    try {
+      if (isOnline) {
+        // Online: delete directly
+        await supabase.from('project_types').delete().eq('id', id);
+      } else {
+        // Offline: mark as deleted and queue for sync
+        await markProjectTypeDeleted(id);
+        await addToSyncQueue({
+          type: 'delete',
+          table: 'project_types',
+          data: { id },
+        });
+      }
+      setShowDeleteModal(null);
+      fetchTypes();
+    } catch (error) {
+      console.error('Error deleting type:', error);
+    }
   }
 
   // Log action to database

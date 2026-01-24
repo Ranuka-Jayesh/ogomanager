@@ -1,3 +1,9 @@
+// Type for individual employee payment assignment
+export interface EmployeePayment {
+  employeeId: string;
+  payment: number;
+}
+
 export interface Project {
   id: string;
   projectId: string;
@@ -8,8 +14,9 @@ export interface Project {
   price: number;
   advance: number;
   balance: number;
-  assignedTo: string;
-  paymentOfEmp: number;
+  assignedTo: string; // Comma-separated employee IDs for multiple assignments
+  paymentOfEmp: number; // Total payment for all employees
+  employeePayments?: EmployeePayment[]; // Array of individual employee payments
   status: 'Running' | 'Pending' | 'Pending Payment' | 'Delivered' | 'Correction' | 'Rejected';
   fastDeliver?: boolean;
   createdAt?: string;

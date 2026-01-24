@@ -320,7 +320,6 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
 
     // For specific month/year, exclude clients from previous months
     const selectedDate = new Date(selectedYear as number, selectedMonth as number, 1);
-    const currentMonthKey = `${selectedYear}-${String((selectedMonth as number) + 1).padStart(2, '0')}`;
     
     // Get all clients from the selected month (using clientName + clientUniOrg as unique identifier)
     // Set automatically deduplicates - same client appearing multiple times in the month counts as 1
@@ -365,6 +364,26 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
   const profit = totalRevenue - totalEmployeePayments;
   const profitMargin = totalRevenue > 0 ? (profit / totalRevenue) * 100 : 0;
 
+  // Total Upcoming: sum of balance from running projects
+  const totalUpcoming = filteredProjects
+    .filter(p => p.status === 'Running')
+    .reduce((sum, project) => {
+      const balance = project.balance !== undefined && project.balance !== null 
+        ? project.balance 
+        : project.price - project.advance;
+      return sum + balance;
+    }, 0);
+
+  // Total Pending: sum of balance from pending projects
+  const totalPending = filteredProjects
+    .filter(p => p.status === 'Pending Payment' || p.status === 'Pending')
+    .reduce((sum, project) => {
+      const balance = project.balance !== undefined && project.balance !== null 
+        ? project.balance 
+        : project.price - project.advance;
+      return sum + balance;
+    }, 0);
+
   const revenueChange = getKpiChange('revenue');
   const profitChange = getKpiChange('profit');
   const employeePaymentsChange = getKpiChange('employeePayments');
@@ -372,11 +391,33 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
 
   const employeePerformance = useMemo(() => {
     return employees.map(employee => {
-      const employeeProjects = filteredProjects.filter(p => p.assignedTo === employee.id);
+      // Filter projects where this employee is assigned (handles comma-separated IDs)
+      const employeeProjects = filteredProjects.filter(p => {
+        if (!p.assignedTo) return false;
+        const assignedIds = p.assignedTo.split(',').map(id => id.trim());
+        return assignedIds.includes(employee.id);
+      });
+      
       const completed = employeeProjects.filter(p => p.status === 'Delivered').length;
-      const totalEarnings = employeeProjects.reduce((sum, p) => sum + p.paymentOfEmp, 0);
+      
+      // Calculate earnings using individual employee payments from employeePayments array
+      const totalEarnings = employeeProjects.reduce((sum, p) => {
+        // Check if project has employeePayments array with individual payments
+        if (p.employeePayments && p.employeePayments.length > 0) {
+          const empPayment = p.employeePayments.find(ep => ep.employeeId === employee.id);
+          return sum + (empPayment ? empPayment.payment : 0);
+        }
+        // Fallback: if single employee, use paymentOfEmp
+        const assignedIds = p.assignedTo ? p.assignedTo.split(',').map(id => id.trim()) : [];
+        if (assignedIds.length === 1 && assignedIds[0] === employee.id) {
+          return sum + p.paymentOfEmp;
+        }
+        return sum;
+      }, 0);
+      
       const revenue = employeeProjects.reduce((sum, p) => sum + p.price, 0);
       const isRanukaJayesh = `${employee.firstName} ${employee.lastName}`.toLowerCase() === 'ranuka jayesh';
+      
       return {
         ...employee,
         projectCount: employeeProjects.length,
@@ -1331,6 +1372,40 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
             </div>
             <div className="p-2 sm:p-3 rounded-full bg-cyan-500/20">
               <Users className="w-5 h-5 sm:w-6 sm:h-6 text-cyan-300" />
+            </div>
+          </div>
+        </GlassCard>
+
+        <GlassCard className="p-4 sm:p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[#F6E9E9]/70 text-sm font-['Inter']">Total Upcoming</p>
+              <p className="text-xl sm:text-2xl font-bold text-[#F6E9E9] mt-1 font-['Poppins']">
+                LKR {totalUpcoming.toLocaleString()}
+              </p>
+              <p className="text-xs mt-1 font-['Inter'] text-[#F6E9E9]/50">
+                Running projects balance
+              </p>
+            </div>
+            <div className="p-2 sm:p-3 rounded-full bg-amber-500/20">
+              <TrendingUp className="w-5 h-5 sm:w-6 sm:h-6 text-amber-300" />
+            </div>
+          </div>
+        </GlassCard>
+
+        <GlassCard className="p-4 sm:p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[#F6E9E9]/70 text-sm font-['Inter']">Total Pending</p>
+              <p className="text-xl sm:text-2xl font-bold text-[#F6E9E9] mt-1 font-['Poppins']">
+                LKR {totalPending.toLocaleString()}
+              </p>
+              <p className="text-xs mt-1 font-['Inter'] text-[#F6E9E9]/50">
+                Pending projects balance
+              </p>
+            </div>
+            <div className="p-2 sm:p-3 rounded-full bg-rose-500/20">
+              <Clock className="w-5 h-5 sm:w-6 sm:h-6 text-rose-300" />
             </div>
           </div>
         </GlassCard>

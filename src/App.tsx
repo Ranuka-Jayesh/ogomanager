@@ -8,14 +8,15 @@ import { EmployeeManagement } from "./components/EmployeeManagement";
 import { Settings } from "./components/Settings";
 import Calendar from "./components/Calendar";
 import { LoginPage } from "./components/LoginPage";
-import { useProjects } from "./hooks/useProjects";
-import { useEmployees } from "./hooks/useEmployees";
+import { useProjectsOffline } from "./hooks/useProjectsOffline";
+import { useEmployeesOffline } from "./hooks/useEmployeesOffline";
 import { supabase } from "./supabaseClient";
 import { LogOut, Fingerprint } from "lucide-react";
 import LoadingScreen from "./components/LoadingScreen";
 import { LastRefreshProvider } from "./contexts/LastRefreshContext";
 import { useMobileNotifications } from "./hooks/useMobileNotifications";
 import { useBiometricAuth } from "./hooks/useBiometricAuth";
+import { SyncStatus } from "./components/SyncStatus";
 
 interface SessionData {
   email: string;
@@ -33,9 +34,37 @@ export function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [minLoadingDone, setMinLoadingDone] = useState(false);
 
-  const { projects, refetch: refetchProjects } = useProjects();
-  const { employees, refetch: refetchEmployees } = useEmployees();
+  const { 
+    projects, 
+    refetch: refetchProjects,
+    isOnline: projectsOnline,
+    pendingChanges: projectsPending,
+    isSyncing: projectsSyncing,
+    syncNow: syncProjectsNow,
+    lastSyncTime: projectsLastSync,
+  } = useProjectsOffline();
+  
+  const { 
+    employees, 
+    refetch: refetchEmployees,
+    isOnline: employeesOnline,
+    pendingChanges: employeesPending,
+    isSyncing: employeesSyncing,
+    syncNow: syncEmployeesNow,
+  } = useEmployeesOffline();
+  
   const { requestPermission } = useMobileNotifications();
+  
+  // Combined online status and sync info
+  const isOnline = projectsOnline && employeesOnline;
+  const totalPendingChanges = projectsPending + employeesPending;
+  const isSyncing = projectsSyncing || employeesSyncing;
+  
+  const syncAll = async () => {
+    const projectsResult = await syncProjectsNow();
+    const employeesResult = await syncEmployeesNow();
+    return projectsResult && employeesResult;
+  };
   const { isSupported, hasCredentials, authenticateBiometric } = useBiometricAuth();
   
   const [showBiometricPrompt, setShowBiometricPrompt] = useState(false);
@@ -269,26 +298,37 @@ export function App() {
           onRefresh={() => {
             refetchProjects();
             refetchEmployees();
-          }} 
+          }}
         />;
       case "analytics":
-        return <Analytics projects={projects} employees={employees} onRefresh={() => {
-          refetchProjects();
-          refetchEmployees();
-        }} />;
+        return <Analytics 
+          projects={projects} 
+          employees={employees} 
+          onRefresh={() => {
+            refetchProjects();
+            refetchEmployees();
+          }}
+        />;
       case "projects":
         return <ProjectManagement employees={employees} />;
       case "employees":
         return <EmployeeManagement />;
       case "calendar":
-        return <Calendar projects={projects} onRefresh={refetchProjects} />;
+        return <Calendar 
+          projects={projects} 
+          onRefresh={refetchProjects}
+        />;
       case "settings":
         return <Settings />;
       default:
-        return <Dashboard projects={projects} employees={employees} onRefresh={() => {
-          refetchProjects();
-          refetchEmployees();
-        }} />;
+        return <Dashboard 
+          projects={projects} 
+          employees={employees} 
+          onRefresh={() => {
+            refetchProjects();
+            refetchEmployees();
+          }}
+        />;
     }
   };
 
@@ -306,6 +346,13 @@ export function App() {
           <Header 
             onMenuToggle={() => setMobileMenuOpen(!mobileMenuOpen)}
             onSidebarToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
+            syncProps={{
+              isOnline,
+              pendingChanges: totalPendingChanges,
+              isSyncing,
+              onSync: syncAll,
+              lastSyncTime: projectsLastSync,
+            }}
           />
         <Navigation 
           activeTab={activeTab} 

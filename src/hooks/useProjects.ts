@@ -16,6 +16,20 @@ export const useProjects = () => {
     return 0;
   };
 
+  // Parse employee_payments from JSONB
+  const parseEmployeePayments = (data: any): { employeeId: string; payment: number }[] => {
+    if (!data) return [];
+    if (typeof data === 'string') {
+      try {
+        return JSON.parse(data);
+      } catch {
+        return [];
+      }
+    }
+    if (Array.isArray(data)) return data;
+    return [];
+  };
+
   // Map database row to Project object
   const mapProjectFromDB = (project: any): Project => ({
     id: project.id,
@@ -28,8 +42,9 @@ export const useProjects = () => {
     advance: toNumber(project.advance),
     // Strictly use stored balance from DB
     balance: toNumber(project.balance),
-    assignedTo: project.assigned_to,
+    assignedTo: project.assigned_to || '',
     paymentOfEmp: toNumber(project.payment_of_emp),
+    employeePayments: parseEmployeePayments(project.employee_payments),
     status: project.status,
     fastDeliver: project.fast_deliver || false,
     createdAt: project.created_at,
@@ -48,6 +63,9 @@ export const useProjects = () => {
     balance: project.balance,
     assigned_to: project.assignedTo || null,
     payment_of_emp: project.paymentOfEmp,
+    employee_payments: project.employeePayments && project.employeePayments.length > 0 
+      ? project.employeePayments 
+      : [],
     status: project.status,
     fast_deliver: (project as any).fastDeliver || false,
   });
@@ -131,6 +149,12 @@ export const useProjects = () => {
       }
       if (updates.assignedTo !== undefined) updateData.assigned_to = updates.assignedTo || null;
       if (updates.paymentOfEmp !== undefined) updateData.payment_of_emp = updates.paymentOfEmp;
+      // Handle employee_payments array
+      if (updates.employeePayments !== undefined) {
+        updateData.employee_payments = updates.employeePayments && updates.employeePayments.length > 0 
+          ? updates.employeePayments 
+          : [];
+      }
       if (updates.status !== undefined) updateData.status = updates.status;
       if ((updates as any).fastDeliver !== undefined) updateData.fast_deliver = (updates as any).fastDeliver;
 

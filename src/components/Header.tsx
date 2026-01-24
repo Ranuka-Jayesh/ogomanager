@@ -4,13 +4,23 @@ import { supabase } from '../supabaseClient';
 import { Project, Employee } from '../types';
 import { useSupabaseConnection } from '../hooks/useSupabaseConnection';
 import { useLastRefresh } from '../contexts/LastRefreshContext';
+import { SyncStatus } from './SyncStatus';
+
+interface SyncProps {
+  isOnline: boolean;
+  pendingChanges: number;
+  isSyncing: boolean;
+  onSync: () => Promise<boolean>;
+  lastSyncTime?: number | null;
+}
 
 interface HeaderProps {
   onMenuToggle: () => void;
   onSidebarToggle: () => void;
+  syncProps?: SyncProps;
 }
 
-export const Header: React.FC<HeaderProps> = ({ onMenuToggle }) => {
+export const Header: React.FC<HeaderProps> = ({ onMenuToggle, syncProps }) => {
   const { status, isConnected, lastPing } = useSupabaseConnection();
   const { lastRefresh } = useLastRefresh();
   const [showLastUpdateTooltip, setShowLastUpdateTooltip] = useState(false);
@@ -422,6 +432,18 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle }) => {
                 </div>
               </div>
             </div>
+
+            {/* Sync Status - After WiFi */}
+            {syncProps && (
+              <SyncStatus
+                isOnline={syncProps.isOnline}
+                pendingChanges={syncProps.pendingChanges}
+                onSync={syncProps.onSync}
+                isSyncing={syncProps.isSyncing}
+                lastSyncTime={syncProps.lastSyncTime}
+                showDetails={true}
+              />
+            )}
 
           <button 
             className="relative p-2 bg-[#272121]/50 border border-[#E16428]/20 rounded-lg hover:bg-[#E16428]/10 transition-all duration-300 group"

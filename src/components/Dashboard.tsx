@@ -1,10 +1,13 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { DollarSign, Clock, CheckCircle, AlertCircle, Calendar, CalendarDays, ChevronDown } from 'lucide-react';
+import ReactDOM from 'react-dom';
+import { DollarSign, Clock, CheckCircle, AlertCircle, Calendar, CalendarDays, ChevronDown, TrendingUp, FolderOpen, Eye, EyeOff, X, Lock, Fingerprint } from 'lucide-react';
 import { Project, Employee } from '../types';
 import { GlassCard } from './GlassCard';
 import { useSupabaseConnection } from '../hooks/useSupabaseConnection';
 import { supabase } from '../supabaseClient';
 import { useLastRefresh } from '../contexts/LastRefreshContext';
+import { useBiometricAuth } from '../hooks/useBiometricAuth';
+import { useMobileDetection } from '../hooks/useMobileDetection';
 
 interface DashboardProps {
   projects: Project[];
@@ -15,6 +18,8 @@ interface DashboardProps {
 export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRefresh }) => {
   useSupabaseConnection();
   const { setLastRefresh } = useLastRefresh();
+  const isMobile = useMobileDetection();
+  const { isSupported: biometricSupported, hasCredentials: hasBiometric, authenticateBiometric } = useBiometricAuth();
   const now = new Date();
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth());
   const [selectedYear, setSelectedYear] = useState(now.getFullYear());
@@ -22,6 +27,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [monthDropdownOpen, setMonthDropdownOpen] = useState(false);
   const [yearDropdownOpen, setYearDropdownOpen] = useState(false);
+  const [pendingCardSlide, setPendingCardSlide] = useState(0); // 0 = Pending Payments, 1 = Total Upcoming
+  const [completedCardSlide, setCompletedCardSlide] = useState(0); // 0 = Completed Projects, 1 = Running Projects
+  
+  // Privacy/Hide values state
+  const [valuesHidden, setValuesHidden] = useState(true); // Start with values hidden
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const [isBiometricLoading, setIsBiometricLoading] = useState(false);
 
   // Filter projects by selected month and year (for stats cards)
   const filteredProjects = projects.filter(project => {
@@ -59,6 +73,34 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
         : project.price - project.advance;
       return sum + balance;
     }, 0);
+
+  // Total Upcoming: sum of balance from running projects
+  const totalUpcoming = filteredProjects
+    .filter(p => p.status === 'Running')
+    .reduce((sum, project) => {
+      const balance = project.balance !== undefined && project.balance !== null 
+        ? project.balance 
+        : project.price - project.advance;
+      return sum + balance;
+    }, 0);
+
+  // Auto-slide effect for the pending payments card
+  useEffect(() => {
+    const slideInterval = setInterval(() => {
+      setPendingCardSlide(prev => (prev === 0 ? 1 : 0));
+    }, 4000); // Switch every 4 seconds
+
+    return () => clearInterval(slideInterval);
+  }, []);
+
+  // Auto-slide effect for the completed/running projects card
+  useEffect(() => {
+    const slideInterval = setInterval(() => {
+      setCompletedCardSlide(prev => (prev === 0 ? 1 : 0));
+    }, 4000); // Switch every 4 seconds
+
+    return () => clearInterval(slideInterval);
+  }, []);
 
   // Manual refresh functionality
   const handleRefresh = useCallback(async () => {
@@ -117,6 +159,76 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
     return () => clearInterval(interval);
   }, [handleRefresh]);
 
+  // Handle visibility toggle
+  const handleToggleVisibility = () => {
+    if (valuesHidden) {
+      // Show password modal to reveal values
+      setShowPasswordModal(true);
+      setPasswordInput('');
+      setPasswordError('');
+    } else {
+      // Hide values immediately
+      setValuesHidden(true);
+    }
+  };
+
+  // Handle password verification
+  const handlePasswordSubmit = async () => {
+    try {
+      // Get current user's email
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user?.email) {
+        setPasswordError('Unable to verify user');
+        return;
+      }
+
+      // Re-authenticate with Supabase
+      const { error } = await supabase.auth.signInWithPassword({
+        email: user.email,
+        password: passwordInput,
+      });
+
+      if (error) {
+        setPasswordError('Incorrect password');
+        return;
+      }
+
+      // Password correct - show values
+      setValuesHidden(false);
+      setShowPasswordModal(false);
+      setPasswordInput('');
+      setPasswordError('');
+    } catch (err) {
+      setPasswordError('Verification failed');
+    }
+  };
+
+  // Handle biometric authentication (fingerprint)
+  const handleBiometricAuth = async () => {
+    if (!biometricSupported || !hasBiometric) return;
+    
+    setIsBiometricLoading(true);
+    setPasswordError('');
+    
+    try {
+      const email = await authenticateBiometric();
+      
+      if (email) {
+        // Biometric verified - show values
+        setValuesHidden(false);
+        setShowPasswordModal(false);
+        setPasswordInput('');
+        setPasswordError('');
+      } else {
+        setPasswordError('Fingerprint verification failed');
+      }
+    } catch (err) {
+      setPasswordError('Fingerprint verification failed');
+    } finally {
+      setIsBiometricLoading(false);
+    }
+  };
+
   React.useEffect(() => {
     async function fetchTypes() {
       const { data } = await supabase.from('project_types').select('*');
@@ -139,30 +251,56 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
     {
       title: 'Total Revenue',
       value: `LKR ${totalRevenue.toLocaleString()}`,
+      hiddenValue: 'LKR •••••••',
       icon: DollarSign,
       color: 'from-emerald-400 to-emerald-600',
       bgColor: 'bg-emerald-500/10',
+      isSensitive: true,
+    },
+    {
+      title: 'Total Projects',
+      value: filteredProjects.length,
+      hiddenValue: '•••',
+      icon: FolderOpen,
+      color: 'from-amber-400 to-amber-600',
+      bgColor: 'bg-amber-500/10',
+      isSensitive: true,
+    },
+  ];
+
+  // Slideshow data for Completed/Running Projects card
+  const completedCardSlides = [
+    {
+      title: 'Completed Projects',
+      value: completedProjects,
+      hiddenValue: '•••',
+      icon: CheckCircle,
+      bgColor: 'bg-green-500/10',
     },
     {
       title: 'Running Projects',
       value: runningProjects,
+      hiddenValue: '•••',
       icon: Clock,
-      color: 'from-blue-400 to-blue-600',
       bgColor: 'bg-blue-500/10',
     },
-    {
-      title: 'Completed Projects',
-      value: completedProjects,
-      icon: CheckCircle,
-      color: 'from-green-400 to-green-600',
-      bgColor: 'bg-green-500/10',
-    },
+  ];
+
+  // Slideshow data for Pending Payments/Total Upcoming card
+  const pendingCardSlides = [
     {
       title: 'Total Pending Payments',
       value: `LKR ${totalPendingPayments.toLocaleString()}`,
+      hiddenValue: 'LKR •••••••',
       icon: AlertCircle,
-      color: 'from-purple-400 to-purple-600',
       bgColor: 'bg-purple-500/10',
+    },
+    {
+      title: 'Total Upcoming',
+      value: `LKR ${totalUpcoming.toLocaleString()}`,
+      hiddenValue: 'LKR •••••••',
+      icon: TrendingUp,
+      bgColor: 'bg-orange-500/10',
     },
   ];
 
@@ -185,9 +323,23 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
     <div className="space-y-6 sm:space-y-8 animate-fadeIn">
       <div className="flex flex-col sm:flex-row items-start sm:items-center sm:justify-between gap-4">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between w-full gap-3 sm:gap-0">
-          <h1 className="text-2xl sm:text-3xl font-bold text-[#F6E9E9] font-['Playfair_Display']">
-            Dashboard Overview
-          </h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl sm:text-3xl font-bold text-[#F6E9E9] font-['Playfair_Display']">
+              Dashboard Overview
+            </h1>
+            {/* Visibility Toggle Button */}
+            <button
+              onClick={handleToggleVisibility}
+              className={`p-2 rounded-lg transition-all duration-300 ${
+                valuesHidden 
+                  ? 'bg-[#E16428]/20 text-[#E16428] hover:bg-[#E16428]/30' 
+                  : 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30'
+              }`}
+              title={valuesHidden ? 'Show values' : 'Hide values'}
+            >
+              {valuesHidden ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+            </button>
+          </div>
           <div className="flex flex-row gap-2 w-full sm:w-auto sm:ml-auto">
             {/* Month Dropdown */}
             <div className="relative w-1/2 sm:w-auto">
@@ -269,8 +421,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-[#F6E9E9]/70 text-sm font-['Inter']">{stat.title}</p>
-                  <p className="text-xl sm:text-2xl font-bold text-[#F6E9E9] mt-1 font-['Poppins']">
-                    {stat.value}
+                  <p className={`text-xl sm:text-2xl font-bold text-[#F6E9E9] mt-1 font-['Poppins'] transition-all duration-300 ${
+                    valuesHidden && stat.isSensitive ? 'blur-sm select-none' : ''
+                  }`}>
+                    {valuesHidden && stat.isSensitive ? stat.hiddenValue : stat.value}
                   </p>
                 </div>
                 <div className={`p-3 rounded-full ${stat.bgColor} flex items-center justify-center`}>
@@ -280,6 +434,74 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
             </GlassCard>
           );
         })}
+
+        {/* Slideshow Card for Completed / Running Projects */}
+        <GlassCard 
+          className="p-4 sm:p-6 hover:scale-105 transition-transform duration-300 cursor-pointer relative overflow-hidden"
+          onClick={() => setCompletedCardSlide(prev => (prev === 0 ? 1 : 0))}
+        >
+          <div className="relative h-full">
+            {completedCardSlides.map((slide, idx) => {
+              const SlideIcon = slide.icon;
+              return (
+                <div
+                  key={idx}
+                  className={`flex items-center justify-between transition-all duration-500 ease-in-out ${
+                    completedCardSlide === idx 
+                      ? 'opacity-100 translate-y-0' 
+                      : 'opacity-0 absolute inset-0 translate-y-4'
+                  }`}
+                >
+                  <div>
+                    <p className="text-[#F6E9E9]/70 text-sm font-['Inter']">{slide.title}</p>
+                    <p className={`text-xl sm:text-2xl font-bold text-[#F6E9E9] mt-1 font-['Poppins'] transition-all duration-300 ${
+                      valuesHidden ? 'blur-sm select-none' : ''
+                    }`}>
+                      {valuesHidden ? slide.hiddenValue : slide.value}
+                    </p>
+                  </div>
+                  <div className={`p-3 rounded-full ${slide.bgColor} flex items-center justify-center`}>
+                    <SlideIcon className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </GlassCard>
+        
+        {/* Slideshow Card for Pending Payments / Total Upcoming */}
+        <GlassCard 
+          className="p-4 sm:p-6 hover:scale-105 transition-transform duration-300 cursor-pointer relative overflow-hidden"
+          onClick={() => setPendingCardSlide(prev => (prev === 0 ? 1 : 0))}
+        >
+          <div className="relative h-full">
+            {pendingCardSlides.map((slide, idx) => {
+              const SlideIcon = slide.icon;
+              return (
+                <div
+                  key={idx}
+                  className={`flex items-center justify-between transition-all duration-500 ease-in-out ${
+                    pendingCardSlide === idx 
+                      ? 'opacity-100 translate-y-0' 
+                      : 'opacity-0 absolute inset-0 translate-y-4'
+                  }`}
+                >
+                  <div>
+                    <p className="text-[#F6E9E9]/70 text-sm font-['Inter']">{slide.title}</p>
+                    <p className={`text-xl sm:text-2xl font-bold text-[#F6E9E9] mt-1 font-['Poppins'] transition-all duration-300 ${
+                      valuesHidden ? 'blur-sm select-none' : ''
+                    }`}>
+                      {valuesHidden ? slide.hiddenValue : slide.value}
+                    </p>
+                  </div>
+                  <div className={`p-3 rounded-full ${slide.bgColor} flex items-center justify-center`}>
+                    <SlideIcon className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </GlassCard>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 sm:gap-8">
@@ -396,6 +618,116 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
           })}
         </div>
       </GlassCard>
+
+      {/* Password Verification Modal - Using Portal to render at body level */}
+      {showPasswordModal && ReactDOM.createPortal(
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fadeIn">
+          <div className="bg-[#1a1a1a] border border-[#E16428]/30 rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-scaleIn">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-[#E16428]/20 rounded-full">
+                  <Lock className="w-5 h-5 text-[#E16428]" />
+                </div>
+                <h3 className="text-lg font-semibold text-[#F6E9E9] font-['Poppins']">
+                  {isMobile && biometricSupported && hasBiometric ? 'Verify Identity' : 'Verify Password'}
+                </h3>
+              </div>
+              <button
+                onClick={() => {
+                  setShowPasswordModal(false);
+                  setPasswordInput('');
+                  setPasswordError('');
+                }}
+                className="p-1 text-[#F6E9E9]/60 hover:text-[#F6E9E9] transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            {/* Fingerprint option for mobile with biometric */}
+            {isMobile && biometricSupported && hasBiometric && (
+              <div className="mb-6">
+                <button
+                  onClick={handleBiometricAuth}
+                  disabled={isBiometricLoading}
+                  className="w-full py-4 bg-gradient-to-r from-[#E16428]/20 to-[#E16428]/10 border border-[#E16428]/30 rounded-xl hover:border-[#E16428]/50 transition-all duration-300 flex flex-col items-center justify-center gap-2 group"
+                >
+                  <div className={`relative p-4 bg-[#E16428]/20 rounded-full group-hover:bg-[#E16428]/30 transition-colors overflow-hidden ${isBiometricLoading ? 'fingerprint-scanning' : ''}`}>
+                    <Fingerprint className={`w-10 h-10 text-[#E16428] ${isBiometricLoading ? 'fingerprint-icon' : ''}`} />
+                    {isBiometricLoading && (
+                      <div className="fingerprint-scan-line" />
+                    )}
+                  </div>
+                  <span className="text-[#F6E9E9] font-medium font-['Inter']">
+                    {isBiometricLoading ? 'Scanning...' : 'Use Fingerprint'}
+                  </span>
+                  <span className="text-[#F6E9E9]/50 text-xs font-['Inter']">
+                    {isBiometricLoading ? 'Please wait' : 'Touch the sensor to unlock'}
+                  </span>
+                </button>
+                
+                <div className="flex items-center gap-3 my-4">
+                  <div className="flex-1 h-px bg-[#E16428]/20"></div>
+                  <span className="text-[#F6E9E9]/50 text-xs font-['Inter']">or use password</span>
+                  <div className="flex-1 h-px bg-[#E16428]/20"></div>
+                </div>
+              </div>
+            )}
+            
+            {/* Only show this label when biometric is NOT available */}
+            {!(isMobile && biometricSupported && hasBiometric) && (
+              <p className="text-[#F6E9E9]/70 text-sm mb-4 font-['Inter']">
+                Enter your password to view sensitive information.
+              </p>
+            )}
+            
+            <div className="space-y-4">
+              <div>
+                <input
+                  type="password"
+                  value={passwordInput}
+                  onChange={(e) => {
+                    setPasswordInput(e.target.value);
+                    setPasswordError('');
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      handlePasswordSubmit();
+                    }
+                  }}
+                  placeholder="Enter your password"
+                  className="w-full px-4 py-3 bg-[#272121]/70 border border-[#E16428]/30 rounded-lg text-[#F6E9E9] placeholder-[#F6E9E9]/40 focus:outline-none focus:border-[#E16428] transition-all duration-300 font-['Inter']"
+                  autoFocus={!(isMobile && biometricSupported && hasBiometric)}
+                />
+                {passwordError && (
+                  <p className="mt-2 text-red-400 text-sm font-['Inter']">{passwordError}</p>
+                )}
+              </div>
+              
+              <div className="flex gap-3">
+                <button
+                  onClick={() => {
+                    setShowPasswordModal(false);
+                    setPasswordInput('');
+                    setPasswordError('');
+                  }}
+                  className="flex-1 px-4 py-2.5 bg-[#272121]/50 text-[#F6E9E9]/70 rounded-lg hover:bg-[#272121] transition-colors font-['Inter'] text-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handlePasswordSubmit}
+                  className="flex-1 px-4 py-2.5 bg-[#E16428] text-white rounded-lg hover:bg-[#E16428]/80 transition-colors font-['Inter'] text-sm font-medium flex items-center justify-center gap-2"
+                >
+                  <Eye className="w-4 h-4" />
+                  Reveal
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 };

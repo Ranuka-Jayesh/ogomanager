@@ -3,41 +3,11 @@ import { Plus, Edit, Trash2, Mail, Phone, MapPin, Cake, User, Briefcase, Graduat
 import { Employee } from '../types';
 import { GlassCard } from './GlassCard';
 import { EmployeeModal } from './EmployeeModal';
-import { supabase } from '../supabaseClient';
 import { useMobileNotifications } from '../hooks/useMobileNotifications';
+import { useEmployeesOffline } from '../hooks/useEmployeesOffline';
 
 interface EmployeeManagementProps {
   // No longer need employees, add, update, delete as props
-}
-
-// Helper: camelCase <-> snake_case mapping
-function toSupabaseEmployee(employee: any) {
-  return {
-    employee_id: employee.employeeId,
-    birthday: employee.birthday,
-    first_name: employee.firstName,
-    last_name: employee.lastName,
-    position: employee.position,
-    address: employee.address,
-    whatsapp: employee.whatsappNumber,
-    email: employee.emailAddress,
-    qualifications: employee.qualifications,
-  };
-}
-function fromSupabaseEmployee(row: any) {
-  return {
-    id: row.id,
-    employeeId: row.employee_id,
-    birthday: row.birthday,
-    firstName: row.first_name,
-    lastName: row.last_name,
-    position: row.position,
-    address: row.address,
-    whatsappNumber: row.whatsapp,
-    emailAddress: row.email,
-    qualifications: row.qualifications,
-    createdAt: row.created_at,
-  };
 }
 
 // Helper to calculate age from birthday
@@ -55,75 +25,45 @@ function getAge(birthday: string) {
 
 export const EmployeeManagement: React.FC<EmployeeManagementProps> = () => {
   const { showNotification } = useMobileNotifications();
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { 
+    employees, 
+    loading, 
+    error,
+    addEmployee: addEmployeeOffline, 
+    updateEmployee: updateEmployeeOffline, 
+    deleteEmployee: deleteEmployeeOffline,
+    isOnline,
+    pendingChanges,
+    isSyncing,
+    syncNow,
+  } = useEmployeesOffline();
+  
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deletingEmployee, setDeletingEmployee] = useState<Employee | null>(null);
 
-  // Fetch employees from Supabase
-  useEffect(() => {
-    async function fetchEmployees() {
-      setLoading(true);
-      const { data, error } = await supabase.from('employees').select('*');
-      if (!error && data) setEmployees(data.map(fromSupabaseEmployee));
-      setLoading(false);
-    }
-    fetchEmployees();
-  }, []);
-
   const addEmployee = async (employee: any) => {
-    const { data, error } = await supabase.from('employees').insert([toSupabaseEmployee(employee)]).select();
-    if (!error && data && data[0]) {
-      setEmployees(prev => [...prev, fromSupabaseEmployee(data[0])]);
-      showNotification(`Employee ${employee.firstName} ${employee.lastName} added successfully`, 'success', {
-        title: 'Manager Pro',
-        icon: '/app.png'
-      });
-    } else if (error) {
-      showNotification(`Failed to add employee: ${error.message}`, 'error', {
-        title: 'Manager Pro',
-        icon: '/app.png'
-      });
-    }
+    await addEmployeeOffline(employee);
+    showNotification(`Employee ${employee.firstName} ${employee.lastName} added successfully`, 'success', {
+      title: 'Manager Pro',
+      icon: '/app.png'
+    });
   };
 
   const updateEmployee = async (id: any, updates: any) => {
-    const { data, error } = await supabase
-      .from('employees')
-      .update(toSupabaseEmployee(updates))
-      .eq('id', id)
-      .select();
-    if (!error && data && data[0]) {
-      setEmployees(prev =>
-        prev.map(emp => (emp.id === id ? fromSupabaseEmployee(data[0]) : emp))
-      );
-      showNotification(`Employee ${updates.firstName} ${updates.lastName} updated successfully`, 'success', {
-        title: 'Manager Pro',
-        icon: '/app.png'
-      });
-    } else if (error) {
-      showNotification(`Failed to update employee: ${error.message}`, 'error', {
-        title: 'Manager Pro',
-        icon: '/app.png'
-      });
-    }
+    await updateEmployeeOffline(id, updates);
+    showNotification(`Employee ${updates.firstName} ${updates.lastName} updated successfully`, 'success', {
+      title: 'Manager Pro',
+      icon: '/app.png'
+    });
   };
 
   const deleteEmployee = async (id: any) => {
     const employee = employees.find(emp => emp.id === id);
-    const { error } = await supabase.from('employees').delete().eq('id', id);
-    if (!error) {
-      setEmployees(prev => prev.filter(emp => emp.id !== id));
-      if (employee) {
-        showNotification(`Employee ${employee.firstName} ${employee.lastName} deleted successfully`, 'info', {
-          title: 'Manager Pro',
-          icon: '/app.png'
-        });
-      }
-    } else {
-      showNotification(`Failed to delete employee: ${error.message}`, 'error', {
+    await deleteEmployeeOffline(id);
+    if (employee) {
+      showNotification(`Employee ${employee.firstName} ${employee.lastName} deleted successfully`, 'info', {
         title: 'Manager Pro',
         icon: '/app.png'
       });

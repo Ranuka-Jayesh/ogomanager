@@ -12,6 +12,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [biometricLoading, setBiometricLoading] = useState(false);
   const [error, setError] = useState('');
   
   // Biometric authentication (mobile only)
@@ -30,7 +31,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
 
   // Handle biometric authentication
   const handleBiometricLogin = async () => {
-    setLoading(true);
+    setBiometricLoading(true);
     setError('');
 
     try {
@@ -62,7 +63,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
     } catch (err: any) {
       setError(err.message || 'Biometric authentication failed.');
     } finally {
-      setLoading(false);
+      setBiometricLoading(false);
     }
   };
 
@@ -213,11 +214,21 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
             <button
               type="button"
               onClick={handleBiometricLogin}
-              disabled={loading}
-              className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-gradient-to-r from-[#E16428]/80 to-[#d35400]/80 text-white font-bold rounded-lg shadow-lg hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-300 focus:outline-none focus:ring-4 focus:ring-[#E16428]/50 mb-2"
+              disabled={biometricLoading || loading}
+              className="w-full flex flex-col items-center justify-center gap-3 py-5 px-4 bg-gradient-to-br from-[#E16428]/20 to-[#d35400]/10 border border-[#E16428]/30 text-white font-bold rounded-xl shadow-lg hover:border-[#E16428]/50 disabled:opacity-70 disabled:cursor-not-allowed transition-all duration-300 focus:outline-none focus:ring-4 focus:ring-[#E16428]/50 mb-2"
             >
-              <Fingerprint className="w-5 h-5" />
-              <span>Use Fingerprint / Face ID</span>
+              <div className={`relative p-4 bg-[#E16428]/20 rounded-full overflow-hidden ${biometricLoading ? 'fingerprint-scanning' : ''}`}>
+                <Fingerprint className={`w-10 h-10 text-[#E16428] ${biometricLoading ? 'fingerprint-icon' : ''}`} />
+                {biometricLoading && (
+                  <div className="fingerprint-scan-line" />
+                )}
+              </div>
+              <span className="text-[#F6E9E9] font-medium">
+                {biometricLoading ? 'Scanning...' : 'Use Fingerprint / Face ID'}
+              </span>
+              <span className="text-[#F6E9E9]/50 text-xs">
+                {biometricLoading ? 'Please wait' : 'Touch the sensor to login'}
+              </span>
             </button>
           )}
 

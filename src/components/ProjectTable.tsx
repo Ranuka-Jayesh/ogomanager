@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Edit, Trash2, Calendar, AlertTriangle, FileText } from 'lucide-react';
 import { Project, Employee } from '../types';
 import { GlassCard } from './GlassCard';
@@ -40,6 +40,65 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
     (currentPage - 1) * recordsPerPage,
     currentPage * recordsPerPage
   );
+
+  // State for employee slideshow - tracks which employee index to show for each project
+  const [employeeSlideIndex, setEmployeeSlideIndex] = useState<Record<string, number>>({});
+  // State for project type slideshow - tracks which type index to show for each project
+  const [typeSlideIndex, setTypeSlideIndex] = useState<Record<string, number>>({});
+  // State for deadline slideshow - toggles between date and days remaining
+  const [deadlineSlideIndex, setDeadlineSlideIndex] = useState<Record<string, number>>({});
+  const projectsRef = useRef(projects);
+  
+  // Keep projects ref updated
+  useEffect(() => {
+    projectsRef.current = projects;
+  }, [projects]);
+
+  // Auto-cycle through employees and project types for projects with multiple items
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const currentProjects = projectsRef.current;
+      // Update employee slide index
+      setEmployeeSlideIndex(prev => {
+        const newState: Record<string, number> = {};
+        currentProjects.forEach(project => {
+          if (project.assignedTo) {
+            const employeeIds = project.assignedTo.split(',').map(id => id.trim()).filter(Boolean);
+            if (employeeIds.length > 1) {
+              const currentIndex = prev[project.id] || 0;
+              newState[project.id] = (currentIndex + 1) % employeeIds.length;
+            }
+          }
+        });
+        return newState;
+      });
+      // Update project type slide index
+      setTypeSlideIndex(prev => {
+        const newState: Record<string, number> = {};
+        currentProjects.forEach(project => {
+          if (project.projectDescription) {
+            const typeIds = project.projectDescription.split(',').map(id => id.trim()).filter(Boolean);
+            if (typeIds.length > 1) {
+              const currentIndex = prev[project.id] || 0;
+              newState[project.id] = (currentIndex + 1) % typeIds.length;
+            }
+          }
+        });
+        return newState;
+      });
+      // Update deadline slide index (toggles between 0 and 1)
+      setDeadlineSlideIndex(prev => {
+        const newState: Record<string, number> = {};
+        currentProjects.forEach(project => {
+          const currentIndex = prev[project.id] || 0;
+          newState[project.id] = (currentIndex + 1) % 2;
+        });
+        return newState;
+      });
+    }, 2000); // Switch every 2 seconds
+
+    return () => clearInterval(interval);
+  }, []);
 
   // Detect if current view is strictly for Pending Payment items
   const isPendingPaymentView = viewFilter === 'Pending Payment' || (paginatedProjects.length > 0 && paginatedProjects.every(p => p.status === 'Pending Payment'));
@@ -85,27 +144,111 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [confirmDeleteId, receiptProject, paymentConfirmationProject]);
 
-  const getEmployeeName = (employeeId: string) => {
+  // Get single employee name by ID
+  const getEmployeeNameById = (employeeId: string): string => {
     if (!employeeId) return 'Unassigned';
-    
-    console.log('Looking for employee with ID:', employeeId);
-    console.log('Available employees:', employees);
     
     const employee = employees.find(emp => emp.id === employeeId);
     
     if (employee) {
-      console.log('Found employee:', employee);
       return `${employee.firstName} ${employee.lastName}`;
     } else {
-      console.log('Employee not found for ID:', employeeId);
       // Try to find by employeeId field as well
       const employeeByEmployeeId = employees.find(emp => emp.employeeId === employeeId);
       if (employeeByEmployeeId) {
-        console.log('Found employee by employeeId:', employeeByEmployeeId);
         return `${employeeByEmployeeId.firstName} ${employeeByEmployeeId.lastName}`;
       }
-      return `Unassigned (ID: ${employeeId})`;
+      return `Unknown`;
     }
+  };
+
+  // Get employee names - handles comma-separated IDs for multiple employees
+  const getEmployeeName = (assignedTo: string) => {
+    if (!assignedTo) return 'Unassigned';
+    
+    // Split by comma for multiple employees
+    const employeeIds = assignedTo.split(',').map(id => id.trim()).filter(Boolean);
+    
+    if (employeeIds.length === 0) return 'Unassigned';
+    
+    // Get names for all employee IDs
+    const names = employeeIds.map(id => getEmployeeNameById(id));
+    
+    // Join names with comma for display
+    return names.join(', ');
+  };
+
+  // Get employee slideshow data for a project (includes payment info)
+  const getEmployeeSlideshow = (project: Project) => {
+    if (!project.assignedTo) return { names: ['Unassigned'], payments: [0], count: 1, currentIndex: 0 };
+    
+    const employeeIds = project.assignedTo.split(',').map(id => id.trim()).filter(Boolean);
+    if (employeeIds.length === 0) return { names: ['Unassigned'], payments: [0], count: 1, currentIndex: 0 };
+    
+    const names = employeeIds.map(id => getEmployeeNameById(id));
+    const currentIndex = employeeSlideIndex[project.id] || 0;
+    
+    // Get payments for each employee
+    const payments = employeeIds.map(id => {
+      if (project.employeePayments && project.employeePayments.length > 0) {
+        const empPayment = project.employeePayments.find(ep => ep.employeeId === id);
+        return empPayment ? empPayment.payment : 0;
+      }
+      // Fallback: if only one employee, use total paymentOfEmp
+      if (employeeIds.length === 1) {
+        return project.paymentOfEmp;
+      }
+      return 0;
+    });
+    
+    return { names, payments, count: names.length, currentIndex };
+  };
+
+  // Render employee slideshow component
+  const renderEmployeeSlideshow = (project: Project, className?: string) => {
+    const { names, count, currentIndex } = getEmployeeSlideshow(project);
+    
+    if (count === 1) {
+      return <span className={className}>{names[0]}</span>;
+    }
+    
+    return (
+      <div className="relative overflow-hidden">
+        <span 
+          key={`${project.id}-${currentIndex}`}
+          className={`block animate-slideSwap ${className}`}
+        >
+          {names[currentIndex]}
+        </span>
+      </div>
+    );
+  };
+
+  // Render payment slideshow component (synced with employee slideshow)
+  const renderPaymentSlideshow = (project: Project) => {
+    const { payments, count, currentIndex } = getEmployeeSlideshow(project);
+    const currentPayment = payments[currentIndex] || 0;
+    
+    if (count === 1) {
+      return (
+        <span className={`flex items-center gap-1 font-medium ${currentPayment < 0 ? 'text-yellow-400' : 'text-green-400/80'}`}>
+          {currentPayment < 0 && <AlertTriangle className="w-3.5 h-3.5 animate-pulse" />}
+          LKR {currentPayment.toLocaleString()}
+        </span>
+      );
+    }
+    
+    return (
+      <div className="relative overflow-hidden">
+        <span 
+          key={`${project.id}-payment-${currentIndex}`}
+          className={`flex items-center gap-1 font-medium animate-slideSwap ${currentPayment < 0 ? 'text-yellow-400' : 'text-green-400/80'}`}
+        >
+          {currentPayment < 0 && <AlertTriangle className="w-3.5 h-3.5 animate-pulse" />}
+          LKR {currentPayment.toLocaleString()}
+        </span>
+      </div>
+    );
   };
 
   const getProjectTypeNames = (projectDescription: string) => {
@@ -119,6 +262,42 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
     });
     
     return typeNames.join(', ');
+  };
+
+  // Get project type slideshow data
+  const getTypeSlideshow = (project: Project) => {
+    if (!project.projectDescription) return { names: ['No types'], count: 1, currentIndex: 0 };
+    
+    const typeIds = project.projectDescription.split(',').map(id => id.trim()).filter(Boolean);
+    if (typeIds.length === 0) return { names: ['No types'], count: 1, currentIndex: 0 };
+    
+    const names = typeIds.map(id => {
+      const type = projectTypes.find(t => t.id === id);
+      return type ? type.name : id;
+    });
+    const currentIndex = typeSlideIndex[project.id] || 0;
+    
+    return { names, count: names.length, currentIndex };
+  };
+
+  // Render project type slideshow component
+  const renderTypeSlideshow = (project: Project, className?: string) => {
+    const { names, count, currentIndex } = getTypeSlideshow(project);
+    
+    if (count === 1) {
+      return <span className={className}>{names[0]}</span>;
+    }
+    
+    return (
+      <div className="relative overflow-hidden">
+        <span 
+          key={`${project.id}-type-${currentIndex}`}
+          className={`block animate-slideSwap ${className}`}
+        >
+          {names[currentIndex]}
+        </span>
+      </div>
+    );
   };
 
   const getStatusColor = (status: string) => {
@@ -136,6 +315,63 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
       default:
         return 'bg-gray-500/20 text-gray-300 border-gray-500/30';
     }
+  };
+
+  // Calculate days remaining until deadline
+  const getDaysRemaining = (deadlineDate: string) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const deadline = new Date(deadlineDate);
+    deadline.setHours(0, 0, 0, 0);
+    const diffTime = deadline.getTime() - today.getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    return diffDays;
+  };
+
+  // Format deadline display with days remaining
+  const formatDeadline = (deadlineDate: string) => {
+    const days = getDaysRemaining(deadlineDate);
+    const dateStr = new Date(deadlineDate).toLocaleDateString();
+    
+    if (days < 0) {
+      return { date: dateStr, daysText: `${days} overdue`, color: 'text-red-400' };
+    } else if (days === 0) {
+      return { date: dateStr, daysText: '0 days left', color: 'text-yellow-400' };
+    } else if (days === 1) {
+      return { date: dateStr, daysText: '1 day left', color: 'text-yellow-400' };
+    } else if (days <= 3) {
+      return { date: dateStr, daysText: `${days} days left`, color: 'text-orange-400' };
+    } else if (days <= 7) {
+      return { date: dateStr, daysText: `${days} days left`, color: 'text-blue-400' };
+    } else {
+      return { date: dateStr, daysText: `${days} days left`, color: 'text-green-400' };
+    }
+  };
+
+  // Render deadline slideshow (cycles between date and days remaining)
+  const renderDeadlineSlideshow = (project: Project, className?: string) => {
+    const { date, daysText, color } = formatDeadline(project.deadlineDate);
+    const currentIndex = deadlineSlideIndex[project.id] || 0;
+    
+    // If status is Delivered, only show the date (no days count)
+    if (project.status === 'Delivered') {
+      return (
+        <span className={`text-[#F6E9E9]/70 ${className}`}>
+          {date}
+        </span>
+      );
+    }
+    
+    return (
+      <div className="relative overflow-hidden">
+        <span 
+          key={`${project.id}-deadline-${currentIndex}`}
+          className={`block animate-slideSwap ${currentIndex === 0 ? 'text-[#F6E9E9]/70' : color} ${className}`}
+        >
+          {currentIndex === 0 ? date : daysText}
+        </span>
+      </div>
+    );
   };
 
   const statuses: Project['status'][] = [
@@ -303,9 +539,9 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="text-[#F6E9E9]/60 text-xs">Assigned</p>
-                      <p className="text-[#F6E9E9] text-sm font-medium truncate">
-                        {getEmployeeName(project.assignedTo)}
-                      </p>
+                      <div className="text-[#F6E9E9] text-sm font-medium truncate">
+                        {renderEmployeeSlideshow(project, "text-[#F6E9E9] text-sm font-medium")}
+                      </div>
                     </div>
                   </div>
 
@@ -318,9 +554,7 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="text-[#F6E9E9]/60 text-xs">Deadline</p>
-                      <p className="text-[#F6E9E9] text-sm font-medium">
-                        {new Date(project.deadlineDate).toLocaleDateString()}
-                      </p>
+                      {renderDeadlineSlideshow(project, "text-sm font-medium")}
                     </div>
                   </div>
 
@@ -348,13 +582,13 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="text-[#F6E9E9]/60 text-xs">{isPendingPaymentView ? 'Balance' : 'Emp.Payment'}</p>
-                      <p className={`text-sm font-medium ${isPendingPaymentView ? 'text-yellow-400' : (project.paymentOfEmp < 0 ? 'text-yellow-400' : 'text-green-400')}`}>
+                      <div className="text-sm font-medium">
                         {isPendingPaymentView ? (
-                          <>LKR {(project.balance ?? 0).toLocaleString()}</>
+                          <span className="text-yellow-400">LKR {(project.balance ?? 0).toLocaleString()}</span>
                         ) : (
-                          <>LKR {project.paymentOfEmp.toLocaleString()}</>
+                          renderPaymentSlideshow(project)
                         )}
-                      </p>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -393,9 +627,9 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
                   <th className="text-left align-middle text-xs sm:text-sm text-[#F6E9E9]/70 font-normal p-2 sm:p-4 font-['Inter'] whitespace-nowrap min-w-[120px]">client</th>
                   <th className="text-left align-middle text-xs sm:text-sm text-[#F6E9E9]/70 font-normal p-2 sm:p-4 font-['Inter'] whitespace-nowrap min-w-[140px]">project types</th>
                   <th className="text-left align-middle text-xs sm:text-sm text-[#F6E9E9]/70 font-normal p-2 sm:p-4 font-['Inter'] whitespace-nowrap min-w-[120px]">assigned to</th>
-                  <th className="text-left align-middle text-xs sm:text-sm text-[#F6E9E9]/70 font-normal p-2 sm:p-4 font-['Inter'] whitespace-nowrap min-w-[100px]">deadline</th>
-                  <th className="text-left align-middle text-xs sm:text-sm text-[#F6E9E9]/70 font-normal p-2 sm:p-4 font-['Inter'] whitespace-nowrap min-w-[100px]">price</th>
                   <th className="text-left align-middle text-xs sm:text-sm text-[#F6E9E9]/70 font-normal p-2 sm:p-4 font-['Inter'] whitespace-nowrap min-w-[100px]">{isPendingPaymentView ? 'Balance' : 'Emp.Payment'}</th>
+                  <th className="text-left align-middle text-xs sm:text-sm text-[#F6E9E9]/70 font-normal p-2 sm:p-4 font-['Inter'] whitespace-nowrap min-w-[100px]">price</th>
+                  <th className="text-left align-middle text-xs sm:text-sm text-[#F6E9E9]/70 font-normal p-2 sm:p-4 font-['Inter'] whitespace-nowrap min-w-[100px]">deadline</th>
                   <th className="text-left align-middle text-xs sm:text-sm text-[#F6E9E9]/70 font-normal p-2 sm:p-4 font-['Inter'] whitespace-nowrap min-w-[100px]">status</th>
                   <th className="text-left align-middle text-xs sm:text-sm text-[#F6E9E9]/70 font-normal p-2 sm:p-4 font-['Inter'] whitespace-nowrap min-w-[100px]">actions</th>
             </tr>
@@ -412,7 +646,7 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
                 </td>
                     <td className="p-2 sm:p-4 align-middle min-w-[140px]">
                       <div>
-                        <span className="text-[#F6E9E9] font-['Inter'] text-xs sm:text-sm break-words">{getProjectTypeNames(project.projectDescription)}</span>
+                        {renderTypeSlideshow(project, "text-[#F6E9E9] font-['Inter'] text-xs sm:text-sm")}
                         {project.fastDeliver && (
                           <div className="mt-1">
                             <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-[#E16428]/20 text-[#E16428] border border-[#E16428]/30">
@@ -423,30 +657,25 @@ export const ProjectTable: React.FC<ProjectTableProps> = ({
                       </div>
                 </td>
                     <td className="p-2 sm:p-4 align-middle min-w-[120px]">
-                      <span className="text-[#F6E9E9] font-['Inter'] text-xs sm:text-sm">{getEmployeeName(project.assignedTo)}</span>
+                      {renderEmployeeSlideshow(project, "text-[#F6E9E9] font-['Inter'] text-xs sm:text-sm")}
                 </td>
-                    <td className="p-2 sm:p-4 align-middle min-w-[100px]">
-                      <div className="flex items-center space-x-1 text-[#F6E9E9]/70 text-xs sm:text-sm">
-                    <Calendar className="w-4 h-4" />
-                    <span className="font-['Inter']">{new Date(project.deadlineDate).toLocaleDateString()}</span>
-                  </div>
-                </td>
-                    <td className="p-2 sm:p-4 align-middle min-w-[100px]">
-                      <span className="text-[#E16428] font-bold font-['Inter'] text-xs sm:text-sm">LKR {project.price.toLocaleString()}</span>
-                    </td>
                     <td className="p-2 sm:p-4 align-middle min-w-[100px]">
                       {isPendingPaymentView ? (
                         <span className={`flex items-center gap-1 font-medium text-yellow-400`}>
                           LKR {(project.balance ?? 0).toLocaleString()}
                         </span>
                       ) : (
-                        <span className={`flex items-center gap-1 font-medium ${project.paymentOfEmp < 0 ? 'text-yellow-400' : 'text-green-400/80'}`}>
-                          {project.paymentOfEmp < 0 && (
-                            <AlertTriangle className="w-3.5 h-3.5 animate-pulse" />
-                          )}
-                          LKR {project.paymentOfEmp.toLocaleString()}
-                        </span>
+                        renderPaymentSlideshow(project)
                       )}
+                </td>
+                    <td className="p-2 sm:p-4 align-middle min-w-[100px]">
+                      <span className="text-[#E16428] font-bold font-['Inter'] text-xs sm:text-sm">LKR {project.price.toLocaleString()}</span>
+                    </td>
+                    <td className="p-2 sm:p-4 align-middle min-w-[120px]">
+                      <div className="flex items-center space-x-1 text-xs sm:text-sm">
+                        <Calendar className="w-4 h-4 text-[#F6E9E9]/70" />
+                        {renderDeadlineSlideshow(project, "font-['Inter']")}
+                      </div>
                 </td>
                     <td className="p-2 sm:p-4 align-middle min-w-[100px]">
                   <select
