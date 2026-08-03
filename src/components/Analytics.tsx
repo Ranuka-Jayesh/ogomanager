@@ -1,11 +1,25 @@
 import React, { useMemo, useState, useEffect, useCallback, useRef } from 'react';
-import { TrendingUp, DollarSign, Users, Calendar, Clock, Download, Lock, X, Info, CalendarDays, CalendarRange, BarChart, Table as TableIcon, ChevronDown } from 'lucide-react';
+import ReactDOM from 'react-dom';
+import { TrendingUp, DollarSign, Users, Calendar, Clock, Download, Lock, X, Info, CalendarDays, CalendarRange, BarChart, Table as TableIcon, ChevronDown, KeyRound } from 'lucide-react';
 import { Project, Employee } from '../types';
 import { GlassCard } from './GlassCard';
+import { MonthYearNavigator } from './MonthYearNavigator';
 import ReportModal from './ReportModal';
 import { supabase } from '../supabaseClient';
 import { Chart, LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend, LineController, Filler } from 'chart.js';
 import { useLastRefresh } from '../contexts/LastRefreshContext';
+import {
+  getEmployeeProjectPaymentBreakdown,
+  getProjectEmployeePaymentsDue,
+  getProjectEmployeePaymentsPaid,
+  getProjectEmployeePaymentsPending,
+} from '../utils/employeePayments';
+import {
+  authenticateWithPin,
+  getLastLoginEmail,
+  getStoredPinLength,
+  loadAdminSecurity,
+} from '../utils/adminSecurity';
 
 Chart.register(LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend, LineController, Filler);
 
@@ -26,8 +40,8 @@ interface MonthlyData {
 export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRefresh }) => {
   const { setLastRefresh } = useLastRefresh();
   // Month/year filter state
-  const [selectedMonth, setSelectedMonth] = useState<'all' | number>(new Date().getMonth());
-  const [selectedYear, setSelectedYear] = useState<'all' | number>(new Date().getFullYear());
+  const [selectedMonth, setSelectedMonth] = useState<number | 'all'>(new Date().getMonth());
+  const [selectedYear, setSelectedYear] = useState<number | 'all'>(new Date().getFullYear());
   const [showReport, setShowReport] = useState(false);
   const [projectTypes, setProjectTypes] = useState<{ id: string; name: string }[]>([]);
   
@@ -36,6 +50,28 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
   const [adminPassword, setAdminPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [pinEnabled, setPinEnabled] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+
+  const getSessionEmail = (): string | null => {
+    try {
+      const raw = localStorage.getItem('ogo_session');
+      if (raw) {
+        const s = JSON.parse(raw);
+        if (typeof s?.email === 'string') return s.email;
+      }
+    } catch {
+      /* ignore */
+    }
+    return getLastLoginEmail();
+  };
+
+  const closeLoginModal = () => {
+    setShowLoginModal(false);
+    setAdminPassword('');
+    setPinInput('');
+    setLoginError('');
+  };
   
   // Auto-refresh state
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -44,9 +80,8 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
   const [periodDropdownOpen, setPeriodDropdownOpen] = useState(false);
   const [viewDropdownOpen, setViewDropdownOpen] = useState(false);
   const [metricsDropdownOpen, setMetricsDropdownOpen] = useState(false);
-  const [monthDropdownOpen, setMonthDropdownOpen] = useState(false);
-  const [yearDropdownOpen, setYearDropdownOpen] = useState(false);
   const [mobileActionsDropdownOpen, setMobileActionsDropdownOpen] = useState(false);
+  const [empPaymentsCardSlide, setEmpPaymentsCardSlide] = useState(0); // 0 = total due, 1 = paid, 2 = pending
   
   // Analytics comparison data state
   const [analyticsComparison, setAnalyticsComparison] = useState<Array<{
@@ -111,6 +146,14 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
     return () => clearInterval(interval);
   }, [handleRefresh]);
 
+  // Auto-slide Total / Paid / Pending employee payments KPI
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setEmpPaymentsCardSlide(prev => (prev + 1) % 3);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, []);
+
   // ESC key handler to close login modal
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -152,36 +195,25 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
   }, []);
 
   // Calculate year range dynamically for the year dropdown
-  const projectYears = projects
-    .map(p => {
-      if (p.createdAt) {
-        const year = new Date(p.createdAt).getFullYear();
-        return typeof year === 'number' && !isNaN(year) ? year : undefined;
-      }
-      return undefined;
-    })
-    .filter((y): y is number => typeof y === 'number');
-  const minYear = projectYears.length ? Math.min(...projectYears) : new Date().getFullYear() - 3;
-  const maxYear = projectYears.length ? Math.max(...projectYears) : new Date().getFullYear() + 2;
-  const years = [];
-  for (let y = maxYear; y >= minYear; y--) {
-    years.push(y);
-  }
+  const availableYears = useMemo(() => {
+    const years = new Set<number>();
+    projects.forEach(p => {
+      if (!p.createdAt) return;
+      const y = new Date(p.createdAt).getFullYear();
+      if (Number.isFinite(y)) years.add(y);
+    });
+    if (years.size === 0) years.add(new Date().getFullYear());
+    return Array.from(years).sort((a, b) => b - a);
+  }, [projects]);
 
   // Filtered projects by month/year
   const filteredProjects = useMemo(() => {
     return projects.filter(project => {
-      if (selectedMonth === 'all' && selectedYear === 'all') return true;
       if (!project.createdAt) return false;
       const created = new Date(project.createdAt);
-      if (selectedMonth !== 'all' && selectedYear !== 'all') {
-        return created.getMonth() === selectedMonth && created.getFullYear() === selectedYear;
-      } else if (selectedMonth !== 'all') {
-        return created.getMonth() === selectedMonth;
-      } else if (selectedYear !== 'all') {
-        return created.getFullYear() === selectedYear;
-      }
-      return true;
+      const monthOk = selectedMonth === 'all' || created.getMonth() === selectedMonth;
+      const yearOk = selectedYear === 'all' || created.getFullYear() === selectedYear;
+      return monthOk && yearOk;
     });
   }, [projects, selectedMonth, selectedYear]);
 
@@ -206,7 +238,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
       
       months[monthKey].revenue += project.price;
       months[monthKey].projects += 1;
-      months[monthKey].employeePayments += project.paymentOfEmp;
+      months[monthKey].employeePayments += getProjectEmployeePaymentsDue(project);
       
       if (project.status === 'Delivered') {
         months[monthKey].completed += 1;
@@ -243,8 +275,8 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
       }
 
       map[key].revenue += project.price;
-      map[key].employeePayments += project.paymentOfEmp;
-      map[key].profit += (project.price - project.paymentOfEmp);
+      map[key].employeePayments += getProjectEmployeePaymentsDue(project);
+      map[key].profit += (project.price - getProjectEmployeePaymentsDue(project));
       // Use clientName + clientUniOrg as unique identifier
       const clientKey = `${project.clientName}|${project.clientUniOrg}`;
       map[key].uniqueClients.add(clientKey);
@@ -285,13 +317,10 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
 
   // Helper: get month-over-month percentage change for a KPI
   const getKpiChange = (metric: 'revenue' | 'profit' | 'employeePayments' | 'uniqueClients') => {
-    // Only show change when a specific month and year are selected
-    if (selectedMonth === 'all' || selectedYear === 'all') {
-      return null;
-    }
+    if (selectedMonth === 'all' || selectedYear === 'all') return null;
 
-    const year = selectedYear as number;
-    const monthIndex = selectedMonth as number; // 0-based
+    const year = selectedYear;
+    const monthIndex = selectedMonth; // 0-based
 
     const currentKey = `${year}-${String(monthIndex + 1).padStart(2, '0')}`;
     const prevDate = new Date(year, monthIndex - 1, 1); // JS handles year rollover
@@ -310,16 +339,18 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
 
   // Calculate unique clients excluding those from previous months
   const uniqueClients = useMemo(() => {
-    // If "all" is selected, just count unique clients in filtered projects
+    // When filtering all months / all years, count unique clients in the filtered set
     if (selectedMonth === 'all' || selectedYear === 'all') {
-      const clientSet = new Set(
-        filteredProjects.map(project => `${project.clientName}|${project.clientUniOrg}`)
-      );
-      return clientSet.size;
+      const clients = new Set<string>();
+      filteredProjects.forEach(project => {
+        const clientKey = `${project.clientName}|${project.clientUniOrg}`;
+        clients.add(clientKey);
+      });
+      return clients.size;
     }
 
-    // For specific month/year, exclude clients from previous months
-    const selectedDate = new Date(selectedYear as number, selectedMonth as number, 1);
+    // Exclude clients from previous months for the selected period
+    const selectedDate = new Date(selectedYear, selectedMonth, 1);
     
     // Get all clients from the selected month (using clientName + clientUniOrg as unique identifier)
     // Set automatically deduplicates - same client appearing multiple times in the month counts as 1
@@ -360,7 +391,18 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
 
   // All analytics below use filteredProjects
   const totalRevenue = filteredProjects.reduce((sum, project) => sum + project.price, 0);
-  const totalEmployeePayments = filteredProjects.reduce((sum, project) => sum + project.paymentOfEmp, 0);
+  const totalEmployeePayments = filteredProjects.reduce(
+    (sum, project) => sum + getProjectEmployeePaymentsDue(project),
+    0
+  );
+  const totalPaidEmployeePayments = filteredProjects.reduce(
+    (sum, project) => sum + getProjectEmployeePaymentsPaid(project),
+    0
+  );
+  const totalPendingEmployeePayments = filteredProjects.reduce(
+    (sum, project) => sum + getProjectEmployeePaymentsPending(project),
+    0
+  );
   const profit = totalRevenue - totalEmployeePayments;
   const profitMargin = totalRevenue > 0 ? (profit / totalRevenue) * 100 : 0;
 
@@ -400,22 +442,22 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
       
       const completed = employeeProjects.filter(p => p.status === 'Delivered').length;
       
-      // Calculate earnings using individual employee payments from employeePayments array
-      const totalEarnings = employeeProjects.reduce((sum, p) => {
-        // Check if project has employeePayments array with individual payments
-        if (p.employeePayments && p.employeePayments.length > 0) {
-          const empPayment = p.employeePayments.find(ep => ep.employeeId === employee.id);
-          return sum + (empPayment ? empPayment.payment : 0);
-        }
-        // Fallback: if single employee, use paymentOfEmp
-        const assignedIds = p.assignedTo ? p.assignedTo.split(',').map(id => id.trim()) : [];
-        if (assignedIds.length === 1 && assignedIds[0] === employee.id) {
-          return sum + p.paymentOfEmp;
-        }
-        return sum;
-      }, 0);
+      // Calculate earnings using individual employee payments (due / paid / remaining)
+      let totalEarnings = 0;
+      let pendingEarnings = 0;
+      let paidEarnings = 0;
+
+      employeeProjects.forEach(p => {
+        const breakdown = getEmployeeProjectPaymentBreakdown(p, employee.id);
+        totalEarnings += breakdown.due;
+        pendingEarnings += breakdown.remaining;
+        paidEarnings += breakdown.paid;
+      });
       
       const revenue = employeeProjects.reduce((sum, p) => sum + p.price, 0);
+      const profit = employeeProjects.reduce((sum, p) => {
+        return sum + (p.price - getProjectEmployeePaymentsDue(p));
+      }, 0);
       const isRanukaJayesh = `${employee.firstName} ${employee.lastName}`.toLowerCase() === 'ranuka jayesh';
       
       return {
@@ -423,8 +465,11 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
         projectCount: employeeProjects.length,
         completedProjects: completed,
         totalEarnings,
+        pendingEarnings,
+        paidEarnings,
         revenue,
-        displayValue: isRanukaJayesh ? revenue : totalEarnings,
+        profit,
+        displayValue: isRanukaJayesh ? profit : totalEarnings,
         completionRate: employeeProjects.length > 0 ? (completed / employeeProjects.length) * 100 : 0,
         isRanukaJayesh,
       };
@@ -479,8 +524,8 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
       const month = created.getMonth();
 
       months[month].revenue += project.price;
-      months[month].employeePayments += project.paymentOfEmp;
-      months[month].profit += (project.price - project.paymentOfEmp);
+      months[month].employeePayments += getProjectEmployeePaymentsDue(project);
+      months[month].profit += (project.price - getProjectEmployeePaymentsDue(project));
       months[month].projectCount += 1;
       // Add client to Set - Set automatically deduplicates, so same client appears only once per month
       const clientKey = `${project.clientName}|${project.clientUniOrg}`;
@@ -557,8 +602,8 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
       }
 
       years[year].revenue += project.price;
-      years[year].employeePayments += project.paymentOfEmp;
-      years[year].profit += (project.price - project.paymentOfEmp);
+      years[year].employeePayments += getProjectEmployeePaymentsDue(project);
+      years[year].profit += (project.price - getProjectEmployeePaymentsDue(project));
       years[year].projectCount += 1;
       const clientKey = `${project.clientName}|${project.clientUniOrg}`;
       years[year].uniqueClients.add(clientKey);
@@ -608,8 +653,8 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
       return null;
     }
 
-    const year = selectedYear as number;
-    const monthIndex = selectedMonth as number;
+    const year = selectedYear;
+    const monthIndex = selectedMonth;
     const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
     const selectedDate = new Date(year, monthIndex, 1);
     
@@ -651,8 +696,8 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
       if (created.getFullYear() === year && created.getMonth() === monthIndex) {
         const day = created.getDate();
         dailyData[day].revenue += project.price;
-        dailyData[day].employeePayments += project.paymentOfEmp;
-        dailyData[day].profit += (project.price - project.paymentOfEmp);
+        dailyData[day].employeePayments += getProjectEmployeePaymentsDue(project);
+        dailyData[day].profit += (project.price - getProjectEmployeePaymentsDue(project));
         dailyData[day].projectCount += 1;
         const clientKey = `${project.clientName}|${project.clientUniOrg}`;
         dailyData[day].uniqueClients.add(clientKey);
@@ -706,8 +751,8 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
 
     if (chartPeriod === 'daily' && dailyChartData && selectedMonth !== 'all' && selectedYear !== 'all') {
       // Daily view - show day-wise data for selected month
-      const year = selectedYear as number;
-      const monthIndex = selectedMonth as number;
+      const year = selectedYear;
+      const monthIndex = selectedMonth;
       const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
       
       labels = Array.from({ length: daysInMonth }, (_, i) => {
@@ -827,8 +872,8 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
   // Create/update chart when tab, year, month, or period changes
   useEffect(() => {
     if (!chartRef.current) return;
-    
-    // If daily view is selected but no month/year selected, don't render chart
+
+    // Daily requires a specific month+year; monthly requires a specific year
     if (chartPeriod === 'daily' && (selectedMonth === 'all' || selectedYear === 'all')) {
       if (chartInstanceRef.current) {
         chartInstanceRef.current.destroy();
@@ -836,8 +881,6 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
       }
       return;
     }
-    
-    // If monthly view is selected but no year selected, don't render chart
     if (chartPeriod === 'monthly' && selectedYear === 'all') {
       if (chartInstanceRef.current) {
         chartInstanceRef.current.destroy();
@@ -845,7 +888,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
       }
       return;
     }
-
+    
     const { labels, data, label, color, backgroundColor } = getChartData();
 
     // If chart exists, update it instead of recreating
@@ -1032,11 +1075,59 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
     const isAuthenticated = await authenticateAdmin(adminPassword);
     
     if (isAuthenticated) {
-      setShowLoginModal(false);
-      setAdminPassword('');
-      setLoginError('');
+      closeLoginModal();
       // Proceed with export
       exportToExcel();
+    }
+  };
+
+  const handlePinAuth = async (pinValue?: string) => {
+    const value = (pinValue ?? pinInput).replace(/\D/g, '');
+    const email = getSessionEmail();
+    if (!email) {
+      setLoginError('Unable to verify user');
+      return;
+    }
+    const len = getStoredPinLength(email);
+    if (value.length < len) return;
+
+    setIsAuthenticating(true);
+    setLoginError('');
+    try {
+      const res = await authenticateWithPin(email, value);
+      if (!res.ok) {
+        await logAction(null, email, 'export_fail');
+        setLoginError('PIN incorrect');
+        setPinInput('');
+        return;
+      }
+      const { data: admin } = await supabase
+        .from('admin')
+        .select('id, email')
+        .ilike('email', email)
+        .maybeSingle();
+      if (admin) {
+        await logAction(admin.id, admin.email, 'export_success');
+      }
+      closeLoginModal();
+      exportToExcel();
+    } catch {
+      await logAction(null, 'Unknown', 'export_fail');
+      setLoginError('Authentication failed. Please try again.');
+      setPinInput('');
+    } finally {
+      setIsAuthenticating(false);
+    }
+  };
+
+  const onPinChange = (raw: string) => {
+    const email = getSessionEmail();
+    const len = email ? getStoredPinLength(email) : 4;
+    const digits = raw.replace(/\D/g, '').slice(0, len);
+    setPinInput(digits);
+    setLoginError('');
+    if (digits.length === len) {
+      void handlePinAuth(digits);
     }
   };
 
@@ -1053,7 +1144,9 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
       'Price',
       'Advance',
       'Assigned To',
-      'Payment of Employee',
+      'Emp Pay Due',
+      'Emp Pay Paid',
+      'Emp Pay Pending',
       'Status',
       'Fast Deliver',
       'Created At',
@@ -1063,8 +1156,17 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
     const csvContent = [
       headers.join(','),
       ...filteredProjects.map(project => {
-        const assignedEmployee = employees.find(emp => emp.id === project.assignedTo);
-        const assignedToName = assignedEmployee ? `${assignedEmployee.firstName} ${assignedEmployee.lastName}` : 'Unassigned';
+        const assignedIds = project.assignedTo
+          ? project.assignedTo.split(',').map(id => id.trim()).filter(Boolean)
+          : [];
+        const assignedToName = assignedIds.length
+          ? assignedIds
+              .map(id => {
+                const emp = employees.find(e => e.id === id);
+                return emp ? `${emp.firstName} ${emp.lastName}` : id;
+              })
+              .join('; ')
+          : 'Unassigned';
         
         // Convert project type IDs to names
         const getProjectTypeNames = (projectDescription: string) => {
@@ -1087,7 +1189,9 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
           project.price,
           project.advance,
           `"${assignedToName}"`,
-          project.paymentOfEmp,
+          getProjectEmployeePaymentsDue(project),
+          getProjectEmployeePaymentsPaid(project),
+          getProjectEmployeePaymentsPending(project),
           project.status,
           project.fastDeliver ? 'Yes' : 'No',
           project.createdAt,
@@ -1102,19 +1206,12 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
     const url = URL.createObjectURL(blob);
     link.setAttribute('href', url);
     
-    // Generate filename based on selected filters
-    let filename = 'projects_export';
-    if (selectedMonth !== 'all' && selectedYear !== 'all') {
-      const monthName = new Date(0, selectedMonth).toLocaleString('default', { month: 'long' });
-      filename = `projects_${monthName}_${selectedYear}`;
-    } else if (selectedMonth !== 'all') {
-      const monthName = new Date(0, selectedMonth).toLocaleString('default', { month: 'long' });
-      filename = `projects_${monthName}_all_years`;
-    } else if (selectedYear !== 'all') {
-      filename = `projects_${selectedYear}`;
-    } else {
-      filename = 'projects_all_time';
-    }
+    const monthName =
+      selectedMonth === 'all'
+        ? 'all_months'
+        : new Date(0, selectedMonth).toLocaleString('default', { month: 'long' });
+    const yearPart = selectedYear === 'all' ? 'all_years' : selectedYear;
+    const filename = `projects_${monthName}_${yearPart}`;
     
     link.setAttribute('download', `${filename}.csv`);
     link.style.visibility = 'hidden';
@@ -1124,118 +1221,35 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
   };
 
   // Handle export button click (triggers login)
-  const handleExportClick = () => {
+  const handleExportClick = async () => {
     setShowLoginModal(true);
     setAdminPassword('');
+    setPinInput('');
     setLoginError('');
+    const email = getSessionEmail();
+    if (email) {
+      const prefs = await loadAdminSecurity(email);
+      setPinEnabled(prefs.pinEnabled);
+    } else {
+      setPinEnabled(false);
+    }
   };
 
   return (
     <div className="space-y-8 animate-fadeIn">
-      {/* Month/Year Filter */}
-      <div className="flex flex-col sm:flex-row items-center gap-2 w-full sm:w-auto mb-4">
-        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-          {/* Month Dropdown */}
-          <div className="relative w-full sm:w-auto">
-            <button
-              onClick={() => setMonthDropdownOpen(!monthDropdownOpen)}
-              className="w-full sm:w-auto pl-9 pr-9 py-2 bg-[#272121]/70 border border-[#E16428]/30 rounded-lg text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200 hover:border-[#E16428] focus:ring-2 focus:ring-[#E16428]/30 text-xs sm:text-sm flex items-center justify-between"
-            >
-              <div className="flex items-center gap-2">
-                <Calendar className="w-4 h-4 text-[#E16428]" />
-                <span>
-                  {selectedMonth === 'all' 
-                    ? 'All Months' 
-                    : new Date(0, selectedMonth as number).toLocaleString('default', { month: 'long' })
-                  }
-                </span>
-              </div>
-              <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${monthDropdownOpen ? 'rotate-180' : ''}`} />
-            </button>
-            {monthDropdownOpen && (
-              <>
-                <div className="fixed inset-0 z-10" onClick={() => setMonthDropdownOpen(false)} />
-                <div className="absolute z-20 mt-1 w-full bg-[#272121] border border-[#E16428]/30 rounded-lg shadow-lg overflow-hidden">
-                  <button
-                    onClick={() => {
-                      setSelectedMonth('all');
-                      setMonthDropdownOpen(false);
-                    }}
-                    className="w-full px-4 py-2 text-left flex items-center gap-2 text-[#F6E9E9] hover:bg-[#E16428]/20 transition-colors"
-                  >
-                    <Calendar className="w-4 h-4" />
-                    <span>All Months</span>
-                  </button>
-                  {Array.from({ length: 12 }).map((_, i) => (
-                    <button
-                      key={i}
-                      onClick={() => {
-                        setSelectedMonth(i);
-                        setMonthDropdownOpen(false);
-                      }}
-                      className="w-full px-4 py-2 text-left flex items-center gap-2 text-[#F6E9E9] hover:bg-[#E16428]/20 transition-colors"
-                    >
-                      <CalendarDays className="w-4 h-4" />
-                      <span>{new Date(0, i).toLocaleString('default', { month: 'long' })}</span>
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-          
-          {/* Year Dropdown */}
-          <div className="relative w-full sm:w-auto">
-            <button
-              onClick={() => setYearDropdownOpen(!yearDropdownOpen)}
-              className="w-full sm:w-auto pl-9 pr-9 py-2 bg-[#272121]/70 border border-[#E16428]/30 rounded-lg text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200 hover:border-[#E16428] focus:ring-2 focus:ring-[#E16428]/30 text-xs sm:text-sm flex items-center justify-between"
-            >
-              <div className="flex items-center gap-2">
-                <Clock className="w-4 h-4 text-[#E16428]" />
-                <span>
-                  {selectedYear === 'all' ? 'All Years' : selectedYear}
-                </span>
-              </div>
-              <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${yearDropdownOpen ? 'rotate-180' : ''}`} />
-            </button>
-            {yearDropdownOpen && (
-              <>
-                <div className="fixed inset-0 z-10" onClick={() => setYearDropdownOpen(false)} />
-                <div className="absolute z-20 mt-1 w-full bg-[#272121] border border-[#E16428]/30 rounded-lg shadow-lg overflow-hidden max-h-60 overflow-y-auto">
-                  <button
-                    onClick={() => {
-                      setSelectedYear('all');
-                      setYearDropdownOpen(false);
-                    }}
-                    className="w-full px-4 py-2 text-left flex items-center gap-2 text-[#F6E9E9] hover:bg-[#E16428]/20 transition-colors"
-                  >
-                    <Clock className="w-4 h-4" />
-                    <span>All Years</span>
-                  </button>
-                  {years.map(year => (
-                    <button
-                      key={year}
-                      onClick={() => {
-                        setSelectedYear(year);
-                        setYearDropdownOpen(false);
-                      }}
-                      className="w-full px-4 py-2 text-left flex items-center gap-2 text-[#F6E9E9] hover:bg-[#E16428]/20 transition-colors"
-                    >
-                      <Clock className="w-4 h-4" />
-                      <span>{year}</span>
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl sm:text-3xl font-bold text-[#F6E9E9] font-['Playfair_Display']">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 min-w-0">
+        <h1 className="text-xl sm:text-3xl font-bold text-[#F6E9E9] font-['Playfair_Display'] shrink-0">
           Analytics & Reports
         </h1>
+        <MonthYearNavigator
+          selectedMonth={selectedMonth}
+          selectedYear={selectedYear}
+          availableYears={availableYears}
+          onChange={(month, year) => {
+            setSelectedMonth(month);
+            setSelectedYear(year);
+          }}
+        />
       </div>
 
       {/* Overview Cards */}
@@ -1313,28 +1327,66 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
           </div>
         </GlassCard>
 
-        <GlassCard className="p-4 sm:p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-[#F6E9E9]/70 text-sm font-['Inter']">Total Employee Payments</p>
-              <p className="text-xl sm:text-2xl font-bold text-[#F6E9E9] mt-1 font-['Poppins']">
-                LKR {totalEmployeePayments.toLocaleString()}
-              </p>
-              {employeePaymentsChange !== null && (
-                <p
-                  className={`text-xs mt-1 font-['Inter'] ${
-                    employeePaymentsChange <= 0 ? 'text-emerald-400' : 'text-red-400'
-                  }`}
-                >
-                  {/* For payments: lower is better, so invert color meaning */}
-                  {employeePaymentsChange >= 0 ? '+' : ''}
-                  {employeePaymentsChange.toFixed(1)}%
-                </p>
-              )}
-            </div>
-            <div className="p-2 sm:p-3 rounded-full bg-yellow-500/20">
-              <Users className="w-5 h-5 sm:w-6 sm:h-6 text-yellow-400" />
-            </div>
+        <GlassCard
+          className="p-4 sm:p-6 cursor-pointer relative overflow-hidden hover:scale-[1.01] transition-transform duration-300"
+          onClick={() => setEmpPaymentsCardSlide(prev => (prev + 1) % 3)}
+        >
+          <div className="relative min-h-[88px]">
+            {[
+              {
+                title: 'Total Employee Payments',
+                value: totalEmployeePayments,
+                change: employeePaymentsChange,
+                iconBg: 'bg-yellow-500/20',
+                iconClass: 'text-yellow-400',
+                valueClass: 'text-[#F6E9E9]',
+              },
+              {
+                title: 'Paid Employee Payments',
+                value: totalPaidEmployeePayments,
+                change: null as number | null,
+                iconBg: 'bg-green-500/20',
+                iconClass: 'text-green-400',
+                valueClass: 'text-green-400',
+              },
+              {
+                title: 'Pending Employee Payments',
+                value: totalPendingEmployeePayments,
+                change: null as number | null,
+                iconBg: 'bg-amber-500/20',
+                iconClass: 'text-amber-300',
+                valueClass: 'text-yellow-400',
+              },
+            ].map((slide, idx) => (
+              <div
+                key={slide.title}
+                className={`flex items-center justify-between transition-all duration-500 ease-in-out ${
+                  empPaymentsCardSlide === idx
+                    ? 'opacity-100 translate-y-0 relative'
+                    : 'opacity-0 absolute inset-0 translate-y-3 pointer-events-none'
+                }`}
+              >
+                <div>
+                  <p className="text-[#F6E9E9]/70 text-sm font-['Inter']">{slide.title}</p>
+                  <p className={`text-xl sm:text-2xl font-bold mt-1 font-['Poppins'] ${slide.valueClass}`}>
+                    LKR {slide.value.toLocaleString()}
+                  </p>
+                  {slide.change !== null && (
+                    <p
+                      className={`text-xs mt-1 font-['Inter'] ${
+                        slide.change <= 0 ? 'text-emerald-400' : 'text-red-400'
+                      }`}
+                    >
+                      {slide.change >= 0 ? '+' : ''}
+                      {slide.change.toFixed(1)}%
+                    </p>
+                  )}
+                </div>
+                <div className={`p-2 sm:p-3 rounded-full ${slide.iconBg}`}>
+                  <Users className={`w-5 h-5 sm:w-6 sm:h-6 ${slide.iconClass}`} />
+                </div>
+              </div>
+            ))}
           </div>
         </GlassCard>
 
@@ -1343,7 +1395,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
             <div>
               <p className="text-[#F6E9E9]/70 text-sm font-['Inter']">Active Employees</p>
               <p className="text-xl sm:text-2xl font-bold text-[#F6E9E9] mt-1 font-['Poppins']">
-                {employees.length}
+                {employees.filter(e => e.isActive !== false).length}
               </p>
             </div>
             <div className="p-2 sm:p-3 rounded-full bg-orange-500/20">
@@ -1450,10 +1502,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
               ) : (
                 <tr>
                   <td colSpan={5} className="py-8 text-center text-[#F6E9E9]/70 font-['Inter']">
-                    {selectedMonth === 'all' && selectedYear === 'all' 
-                      ? 'No projects found in the database'
-                      : `No projects found for the selected ${selectedMonth !== 'all' ? 'month' : ''}${selectedMonth !== 'all' && selectedYear !== 'all' ? ' and ' : ''}${selectedYear !== 'all' ? 'year' : ''}`
-                    }
+                    No projects found for the selected month and year
                   </td>
                 </tr>
               )}
@@ -1469,7 +1518,10 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
             Employee Performance
           </h2>
           <div className="space-y-3 sm:space-y-4">
-            {employeePerformance.slice(0, 5).map((employee) => (
+            {employeePerformance
+              .filter(employee => employee.projectCount > 0)
+              .slice(0, 5)
+              .map((employee) => (
               <div key={employee.id} className="flex items-center justify-between p-3 sm:p-4 bg-[#272121]/30 rounded-lg">
                 <div>
                   <p className="text-[#F6E9E9] font-medium font-['Inter'] text-sm sm:text-base">
@@ -1481,10 +1533,20 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
                 </div>
                 <div className="text-right">
                   <p className="text-[#E16428] font-bold text-sm sm:text-base">
-                    LKR {employee.displayValue.toLocaleString()}
+                    {employee.isRanukaJayesh ? (
+                      <>LKR {(employee.profit ?? employee.displayValue).toLocaleString()}</>
+                    ) : (
+                      <span className="inline-flex items-baseline gap-1 flex-wrap justify-end">
+                        <span className="text-yellow-400">LKR {(employee.pendingEarnings || 0).toLocaleString()}</span>
+                        <span className="text-[#F6E9E9]/40 font-normal">/</span>
+                        <span>LKR {employee.totalEarnings.toLocaleString()}</span>
+                      </span>
+                    )}
                   </p>
                   <p className="text-[#F6E9E9]/70 text-xs sm:text-sm">
-                    {employee.completionRate.toFixed(1)}% success
+                    {employee.isRanukaJayesh
+                      ? `${employee.completionRate.toFixed(1)}% success · profit`
+                      : `${employee.completionRate.toFixed(1)}% · pending / total`}
                   </p>
                 </div>
               </div>
@@ -1539,12 +1601,12 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
               {chartPeriod === 'yearly'
                 ? 'Annual Trends'
                 : chartPeriod === 'monthly'
-                  ? selectedYear !== 'all'
-                    ? `Monthly Trends - ${selectedYear}`
-                    : 'Monthly Trends - Please select a year'
-                  : selectedMonth !== 'all' && selectedYear !== 'all'
-                    ? `Month Trends - ${new Date(0, selectedMonth as number).toLocaleString('default', { month: 'long' })} ${selectedYear}`
-                    : 'Month Trends - Please select a month and year'
+                  ? `Monthly Trends - ${selectedYear === 'all' ? 'All years' : selectedYear}`
+                  : `Month Trends - ${
+                      selectedMonth === 'all'
+                        ? 'All months'
+                        : new Date(0, selectedMonth).toLocaleString('default', { month: 'long' })
+                    } ${selectedYear === 'all' ? 'All years' : selectedYear}`
               }
             </h2>
             
@@ -1587,34 +1649,20 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
                             </button>
                             <button
                               onClick={() => {
-                                if (selectedYear !== 'all') {
-                                  setChartPeriod('monthly');
-                                  setPeriodDropdownOpen(false);
-                                } else {
-                                  setNotificationMessage('Please select a specific year to view monthly trends');
-                                  setShowNotification(true);
-                                  setPeriodDropdownOpen(false);
-                                }
+                                setChartPeriod('monthly');
+                                setPeriodDropdownOpen(false);
                               }}
-                              disabled={selectedYear === 'all'}
-                              className={`w-full px-4 py-2 text-left flex items-center gap-2 text-[#F6E9E9] hover:bg-[#E16428]/20 transition-colors ${selectedYear === 'all' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                              className="w-full px-4 py-2 text-left flex items-center gap-2 text-[#F6E9E9] hover:bg-[#E16428]/20 transition-colors"
                             >
                               <CalendarDays className="w-4 h-4" />
                               <span>Monthly</span>
                             </button>
                             <button
                               onClick={() => {
-                                if (selectedMonth !== 'all' && selectedYear !== 'all') {
-                                  setChartPeriod('daily');
-                                  setPeriodDropdownOpen(false);
-                                } else {
-                                  setNotificationMessage('Please select a specific month and year to view day-wise trends');
-                                  setShowNotification(true);
-                                  setPeriodDropdownOpen(false);
-                                }
+                                setChartPeriod('daily');
+                                setPeriodDropdownOpen(false);
                               }}
-                              disabled={selectedMonth === 'all' || selectedYear === 'all'}
-                              className={`w-full px-4 py-2 text-left flex items-center gap-2 text-[#F6E9E9] hover:bg-[#E16428]/20 transition-colors ${selectedMonth === 'all' || selectedYear === 'all' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                              className="w-full px-4 py-2 text-left flex items-center gap-2 text-[#F6E9E9] hover:bg-[#E16428]/20 transition-colors"
                             >
                               <Calendar className="w-4 h-4" />
                               <span>Month</span>
@@ -1761,50 +1809,39 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
               {viewMode === 'chart' && (
                 <div className="flex flex-col gap-2">
                   <label className="text-xs text-[#F6E9E9]/70 font-['Inter'] font-medium">Period</label>
-                  <div className="flex gap-2">
+                  <div className="flex gap-3">
                     <button
+                      type="button"
                       onClick={() => setChartPeriod('yearly')}
-                      className={`px-4 py-2 rounded-lg font-['Inter'] text-sm transition-all duration-200 flex items-center gap-2 ${
+                      className={`px-1 pb-2 border-0 border-b-2 rounded-none bg-transparent font-['Inter'] text-sm transition-colors duration-200 flex items-center gap-2 ${
                         chartPeriod === 'yearly'
-                          ? 'bg-green-500 text-white shadow-lg hover:bg-green-600'
-                          : 'bg-[#272121]/50 text-[#F6E9E9]/70 hover:bg-green-500/20'
+                          ? 'border-green-500 text-green-400'
+                          : 'border-transparent text-[#F6E9E9]/55 hover:text-green-400/80 hover:border-green-500/40'
                       }`}
                     >
                       <CalendarRange className="w-4 h-4" />
                       <span>Annual</span>
                     </button>
                     <button
-                      onClick={() => {
-                        if (selectedYear !== 'all') {
-                          setChartPeriod('monthly');
-                        } else {
-                          setNotificationMessage('Please select a specific year to view monthly trends');
-                          setShowNotification(true);
-                        }
-                      }}
-                      className={`px-4 py-2 rounded-lg font-['Inter'] text-sm transition-all duration-200 flex items-center gap-2 ${
+                      type="button"
+                      onClick={() => setChartPeriod('monthly')}
+                      className={`px-1 pb-2 border-0 border-b-2 rounded-none bg-transparent font-['Inter'] text-sm transition-colors duration-200 flex items-center gap-2 ${
                         chartPeriod === 'monthly'
-                          ? 'bg-blue-500 text-white shadow-lg hover:bg-blue-600'
-                          : 'bg-[#272121]/50 text-[#F6E9E9]/70 hover:bg-blue-500/20'
-                      } ${selectedYear === 'all' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                          ? 'border-blue-500 text-blue-400'
+                          : 'border-transparent text-[#F6E9E9]/55 hover:text-blue-400/80 hover:border-blue-500/40'
+                      }`}
                     >
                       <CalendarDays className="w-4 h-4" />
                       <span>Monthly</span>
                     </button>
                     <button
-                      onClick={() => {
-                        if (selectedMonth !== 'all' && selectedYear !== 'all') {
-                          setChartPeriod('daily');
-                        } else {
-                          setNotificationMessage('Please select a specific month and year to view day-wise trends');
-                          setShowNotification(true);
-                        }
-                      }}
-                      className={`px-4 py-2 rounded-lg font-['Inter'] text-sm transition-all duration-200 flex items-center gap-2 ${
+                      type="button"
+                      onClick={() => setChartPeriod('daily')}
+                      className={`px-1 pb-2 border-0 border-b-2 rounded-none bg-transparent font-['Inter'] text-sm transition-colors duration-200 flex items-center gap-2 ${
                         chartPeriod === 'daily'
-                          ? 'bg-purple-500 text-white shadow-lg hover:bg-purple-600'
-                          : 'bg-[#272121]/50 text-[#F6E9E9]/70 hover:bg-purple-500/20'
-                      } ${selectedMonth === 'all' || selectedYear === 'all' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                          ? 'border-purple-500 text-purple-400'
+                          : 'border-transparent text-[#F6E9E9]/55 hover:text-purple-400/80 hover:border-purple-500/40'
+                      }`}
                     >
                       <Calendar className="w-4 h-4" />
                       <span>Month</span>
@@ -1816,24 +1853,26 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
               {/* View Mode Toggle */}
               <div className="flex flex-col gap-2">
                 <label className="text-xs text-[#F6E9E9]/70 font-['Inter'] font-medium">View</label>
-                <div className="flex gap-2">
+                <div className="flex gap-3">
                   <button
+                    type="button"
                     onClick={() => setViewMode('chart')}
-                    className={`px-4 py-2 rounded-lg font-['Inter'] text-sm transition-all duration-200 flex items-center gap-2 ${
+                    className={`px-1 pb-2 border-0 border-b-2 rounded-none bg-transparent font-['Inter'] text-sm transition-colors duration-200 flex items-center gap-2 ${
                       viewMode === 'chart'
-                        ? 'bg-[#E16428] text-white shadow-lg'
-                        : 'bg-[#272121]/50 text-[#F6E9E9]/70 hover:bg-[#E16428]/20'
+                        ? 'border-[#E16428] text-[#E16428]'
+                        : 'border-transparent text-[#F6E9E9]/55 hover:text-[#E16428]/80 hover:border-[#E16428]/40'
                     }`}
                   >
                     <BarChart className="w-4 h-4" />
                     <span>Chart</span>
                   </button>
                   <button
+                    type="button"
                     onClick={() => setViewMode('table')}
-                    className={`px-4 py-2 rounded-lg font-['Inter'] text-sm transition-all duration-200 flex items-center gap-2 ${
+                    className={`px-1 pb-2 border-0 border-b-2 rounded-none bg-transparent font-['Inter'] text-sm transition-colors duration-200 flex items-center gap-2 ${
                       viewMode === 'table'
-                        ? 'bg-[#E16428] text-white shadow-lg'
-                        : 'bg-[#272121]/50 text-[#F6E9E9]/70 hover:bg-[#E16428]/20'
+                        ? 'border-[#E16428] text-[#E16428]'
+                        : 'border-transparent text-[#F6E9E9]/55 hover:text-[#E16428]/80 hover:border-[#E16428]/40'
                     }`}
                   >
                     <TableIcon className="w-4 h-4" />
@@ -1848,57 +1887,62 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
           {viewMode === 'chart' && (
             <div className="hidden sm:flex sm:flex-col gap-2 mb-4">
               <label className="text-xs text-[#F6E9E9]/70 font-['Inter'] font-medium">Metrics</label>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-3">
                 <button
+                  type="button"
                   onClick={() => setActiveTab('revenue')}
-                  className={`px-4 py-2 rounded-lg font-['Inter'] text-sm transition-all duration-200 flex items-center gap-2 ${
+                  className={`px-1 pb-2 border-0 border-b-2 rounded-none bg-transparent font-['Inter'] text-sm transition-colors duration-200 flex items-center gap-2 ${
                     activeTab === 'revenue'
-                      ? 'bg-[#E16428] text-white shadow-lg'
-                      : 'bg-[#272121]/50 text-[#F6E9E9]/70 hover:bg-[#E16428]/20'
+                      ? 'border-[#E16428] text-[#E16428]'
+                      : 'border-transparent text-[#F6E9E9]/55 hover:text-[#E16428]/80 hover:border-[#E16428]/40'
                   }`}
                 >
                   <DollarSign className="w-4 h-4" />
                   <span>Revenue</span>
                 </button>
                 <button
+                  type="button"
                   onClick={() => setActiveTab('profit')}
-                  className={`px-4 py-2 rounded-lg font-['Inter'] text-sm transition-all duration-200 flex items-center gap-2 ${
+                  className={`px-1 pb-2 border-0 border-b-2 rounded-none bg-transparent font-['Inter'] text-sm transition-colors duration-200 flex items-center gap-2 ${
                     activeTab === 'profit'
-                      ? 'bg-[#10b981] text-white shadow-lg'
-                      : 'bg-[#272121]/50 text-[#F6E9E9]/70 hover:bg-[#10b981]/20'
+                      ? 'border-emerald-500 text-emerald-400'
+                      : 'border-transparent text-[#F6E9E9]/55 hover:text-emerald-400/80 hover:border-emerald-500/40'
                   }`}
                 >
                   <TrendingUp className="w-4 h-4" />
                   <span>Profit</span>
                 </button>
                 <button
+                  type="button"
                   onClick={() => setActiveTab('employeePayments')}
-                  className={`px-4 py-2 rounded-lg font-['Inter'] text-sm transition-all duration-200 flex items-center gap-2 ${
+                  className={`px-1 pb-2 border-0 border-b-2 rounded-none bg-transparent font-['Inter'] text-sm transition-colors duration-200 flex items-center gap-2 ${
                     activeTab === 'employeePayments'
-                      ? 'bg-[#3b82f6] text-white shadow-lg'
-                      : 'bg-[#272121]/50 text-[#F6E9E9]/70 hover:bg-[#3b82f6]/20'
+                      ? 'border-blue-500 text-blue-400'
+                      : 'border-transparent text-[#F6E9E9]/55 hover:text-blue-400/80 hover:border-blue-500/40'
                   }`}
                 >
                   <Users className="w-4 h-4" />
                   <span>Employee Payments</span>
                 </button>
                 <button
+                  type="button"
                   onClick={() => setActiveTab('projectTrends')}
-                  className={`px-4 py-2 rounded-lg font-['Inter'] text-sm transition-all duration-200 flex items-center gap-2 ${
+                  className={`px-1 pb-2 border-0 border-b-2 rounded-none bg-transparent font-['Inter'] text-sm transition-colors duration-200 flex items-center gap-2 ${
                     activeTab === 'projectTrends'
-                      ? 'bg-[#8b5cf6] text-white shadow-lg'
-                      : 'bg-[#272121]/50 text-[#F6E9E9]/70 hover:bg-[#8b5cf6]/20'
+                      ? 'border-violet-500 text-violet-400'
+                      : 'border-transparent text-[#F6E9E9]/55 hover:text-violet-400/80 hover:border-violet-500/40'
                   }`}
                 >
                   <BarChart className="w-4 h-4" />
                   <span>Project Trends</span>
                 </button>
                 <button
+                  type="button"
                   onClick={() => setActiveTab('uniqueClients')}
-                  className={`px-4 py-2 rounded-lg font-['Inter'] text-sm transition-all duration-200 flex items-center gap-2 ${
+                  className={`px-1 pb-2 border-0 border-b-2 rounded-none bg-transparent font-['Inter'] text-sm transition-colors duration-200 flex items-center gap-2 ${
                     activeTab === 'uniqueClients'
-                      ? 'bg-[#06b6d4] text-white shadow-lg'
-                      : 'bg-[#272121]/50 text-[#F6E9E9]/70 hover:bg-[#06b6d4]/20'
+                      ? 'border-cyan-500 text-cyan-400'
+                      : 'border-transparent text-[#F6E9E9]/55 hover:text-cyan-400/80 hover:border-cyan-500/40'
                   }`}
                 >
                   <Users className="w-4 h-4" />
@@ -2228,66 +2272,98 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
       )}
 
       {/* Admin Login Modal */}
-      {showLoginModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn p-4">
-          <div className="bg-[#272121] border border-[#E16428]/30 rounded-2xl shadow-2xl p-6 sm:p-8 max-w-md w-full scale-100 animate-popIn">
-            <div className="flex items-center justify-between mb-6">
+      {showLoginModal && ReactDOM.createPortal(
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fadeIn"
+          onClick={closeLoginModal}
+        >
+          <div
+            className="w-full max-w-sm p-6 animate-scaleIn"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-5">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-[#E16428]/20 rounded-full">
-                  <Lock className="w-6 h-6 text-[#E16428]" />
+                <div className="flex h-10 w-10 items-center justify-center rounded-full border border-[#E16428]/30 bg-[#E16428]/12">
+                  {pinEnabled ? (
+                    <KeyRound className="w-4 h-4 text-[#E16428]" />
+                  ) : (
+                    <Lock className="w-4 h-4 text-[#E16428]" />
+                  )}
                 </div>
-                <h3 className="text-xl font-bold text-[#F6E9E9] font-['Poppins']">
-                  Admin Authentication
+                <h3 className="text-lg font-semibold text-[#F6E9E9] font-['Poppins']">
+                  {pinEnabled ? 'Verify PIN' : 'Admin Authentication'}
                 </h3>
               </div>
               <button
-                onClick={() => setShowLoginModal(false)}
-                className="p-2 hover:bg-[#363333]/60 rounded-full transition-colors"
+                type="button"
+                onClick={closeLoginModal}
+                className="p-1 text-[#F6E9E9]/60 hover:text-[#F6E9E9] transition-colors"
               >
-                <X className="w-5 h-5 text-[#F6E9E9]/70" />
+                <X className="w-5 h-5" />
               </button>
             </div>
-            
-            <form onSubmit={handleLoginSubmit} className="space-y-4">
-              <div>
-                <label className="block text-[#F6E9E9] text-sm font-medium mb-2 font-['Inter']">
-                  Admin Password
-                </label>
+            <p className="text-[#F6E9E9]/70 text-sm mb-4 font-['Inter']">
+              {pinEnabled
+                ? 'Enter your OGO PIN to export data.'
+                : 'Enter admin password to export data.'}
+            </p>
+
+            {pinEnabled ? (
+              <div className="space-y-4">
                 <input
                   type="password"
-                  value={adminPassword}
-                  onChange={(e) => setAdminPassword(e.target.value)}
-                  className="w-full px-4 py-3 bg-[#363333]/60 border border-[#E16428]/30 rounded-lg text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200"
-                  placeholder="Enter admin password"
-                  autoFocus
-                />
-              </div>
-              
-              {loginError && (
-                <div className="p-3 bg-red-500/20 border border-red-500/30 rounded-lg">
-                  <p className="text-red-400 text-sm font-['Inter']">{loginError}</p>
-                </div>
-              )}
-              
-              <div className="flex gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowLoginModal(false)}
-                  className="flex-1 px-4 py-3 bg-[#363333]/60 text-[#F6E9E9] rounded-lg hover:bg-[#E16428]/10 transition-all duration-200 font-['Poppins'] font-medium"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
+                  inputMode="numeric"
+                  maxLength={getSessionEmail() ? getStoredPinLength(getSessionEmail()!) : 4}
+                  value={pinInput}
+                  onChange={(e) => onPinChange(e.target.value)}
                   disabled={isAuthenticating}
-                  className="flex-1 px-4 py-3 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white rounded-lg shadow-lg hover:scale-105 transition-all duration-200 font-['Poppins'] font-bold disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
-                >
-                  {isAuthenticating ? 'Authenticating...' : 'Export Data'}
-                </button>
+                  placeholder="OGO PIN"
+                  autoFocus
+                  className="underline-field w-full px-1 py-3 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] placeholder-[#F6E9E9]/40 focus:outline-none focus:border-[#E16428] focus:ring-0 focus:shadow-none transition-all duration-300 font-['Inter'] tracking-[0.35em] text-center text-lg"
+                />
+                {loginError && (
+                  <p className="text-red-400 text-sm text-center font-['Inter']">{loginError}</p>
+                )}
               </div>
-            </form>
+            ) : (
+              <form onSubmit={handleLoginSubmit} className="space-y-4">
+                <div>
+                  <input
+                    type="password"
+                    value={adminPassword}
+                    onChange={(e) => {
+                      setAdminPassword(e.target.value);
+                      setLoginError('');
+                    }}
+                    className="underline-field w-full px-1 py-3 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] placeholder-[#F6E9E9]/40 focus:outline-none focus:border-[#E16428] focus:ring-0 focus:shadow-none transition-all duration-300 font-['Inter']"
+                    placeholder="Enter admin password"
+                    autoFocus
+                  />
+                  {loginError && (
+                    <p className="mt-2 text-red-400 text-sm font-['Inter']">{loginError}</p>
+                  )}
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={closeLoginModal}
+                    className="flex-1 px-4 py-2.5 bg-transparent border border-[#E16428]/25 text-[#F6E9E9]/80 rounded-lg hover:border-[#E16428]/45 hover:bg-[#E16428]/8 transition-all duration-200 font-['Inter'] text-sm"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isAuthenticating}
+                    className="flex-1 px-4 py-2.5 bg-[#E16428] text-white rounded-lg hover:bg-[#d4551f] transition-colors font-['Inter'] text-sm font-semibold disabled:opacity-50"
+                  >
+                    {isAuthenticating ? '…' : 'Export Data'}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Interactive Notification Modal */}

@@ -1,8 +1,10 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
-import { X, Download, Share2, Crown } from 'lucide-react';
+import { X, Download, Share2, Crown, BadgePercent, Loader2 } from 'lucide-react';
 import { Project } from '../types';
+import { drawProjectReceiptCanvas } from '../utils/drawProjectReceipt';
+import { fillReceiptCaption, getReceiptCaptionForStatus } from '../utils/receiptCaption';
+import { whatsappMarkupToShareText } from '../utils/whatsappShareText';
 
 interface ProjectType {
   id: string;
@@ -15,77 +17,86 @@ interface ProjectReceiptModalProps {
   onClose: () => void;
 }
 
-export const ProjectReceiptModal: React.FC<ProjectReceiptModalProps> = ({ project, projectTypes, onClose }) => {
-  const receiptRef = useRef<HTMLDivElement>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
+const statusValueColors: Record<string, string> = {
+  Running: 'text-blue-300',
+  Delivered: 'text-green-300',
+  Pending: 'text-yellow-300',
+  'Pending Payment': 'text-purple-300',
+  Correction: 'text-orange-300',
+  Rejected: 'text-red-300',
+};
 
-  // ESC key handler to close modal
+export const ProjectReceiptModal: React.FC<ProjectReceiptModalProps> = ({
+  project,
+  projectTypes,
+  onClose,
+}) => {
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generatingLabel, setGeneratingLabel] = useState('Preparing…');
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onClose();
-      }
+      if (event.key === 'Escape' && !isGenerating) onClose();
     };
-
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  }, [onClose, isGenerating]);
 
-  const getProjectTypeNames = (projectDescription: string) => {
-    if (!projectDescription) return 'No types specified';
-    const typeIds = projectDescription.split(',').map((id: string) => id.trim());
-    const typeNames = typeIds.map((id: string) => {
-      const type = projectTypes.find((t: ProjectType) => t.id === id);
-      return type ? type.name : `Unknown Type (${id})`;
+  const typeNames = useMemo(() => {
+    if (!project.projectDescription) return [] as string[];
+    return project.projectDescription
+      .split(',')
+      .map(id => id.trim())
+      .filter(Boolean)
+      .map(id => projectTypes.find(t => t.id === id)?.name || id);
+  }, [project.projectDescription, projectTypes]);
+
+  const hasDiscount = Boolean(project.giveDiscount && (project.discountAmount || 0) > 0);
+  const discountAmount = hasDiscount ? project.discountAmount || 0 : 0;
+  const netPrice = Math.max(0, project.price - discountAmount);
+  const balance =
+    project.balance !== undefined && project.balance !== null
+      ? project.balance
+      : Math.max(0, project.price - project.advance - discountAmount);
+  const discountPercent =
+    hasDiscount && project.price > 0
+      ? Math.round((discountAmount / project.price) * 1000) / 10
+      : 0;
+
+  const buildReceiptCanvas = () =>
+    drawProjectReceiptCanvas({
+      projectId: project.projectId,
+      clientName: project.clientName,
+      clientUniOrg: project.clientUniOrg || '',
+      typeNames,
+      deadlineDate: project.deadlineDate,
+      price: project.price,
+      advance: project.advance,
+      balance,
+      status: project.status,
+      hasDiscount,
+      discountAmount,
+      discountPercent,
+      netPrice,
+      fastDeliver: Boolean(project.fastDeliver),
     });
-    return typeNames.join(', ');
-  };
 
   const handleDownload = async () => {
-    const element = receiptRef.current;
-    if (!element) return;
+    setGeneratingLabel('Preparing PDF…');
     setIsGenerating(true);
     try {
-      // Optimize scale for mobile devices
-      const isMobile = window.innerWidth < 768;
-      const scale = isMobile ? 2 : 3;
-      
-      const canvas = await html2canvas(element, { 
-        scale: scale,
-        useCORS: true,
-        allowTaint: true,
-        backgroundColor: '#1a1818',
-        width: element.offsetWidth,
-        height: element.offsetHeight,
-        logging: false,
-        onclone: (clonedDoc) => {
-          // Ensure all images are loaded in cloned document
-          const clonedElement = clonedDoc.querySelector('[data-receipt]') || clonedDoc.body;
-          const images = clonedElement.querySelectorAll('img');
-          images.forEach((img: HTMLImageElement) => {
-            if (!img.complete) {
-              img.src = img.src;
-            }
-          });
-        }
-      });
-      const imgData = canvas.toDataURL('image/png', 0.95);
-      
-      // Calculate optimal PDF size based on canvas dimensions
-      const canvasWidth = canvas.width;
-      const canvasHeight = canvas.height;
-      const aspectRatio = canvasHeight / canvasWidth;
-      
-      // Use A4-like proportions but adjust to content
-      const pdfWidth = 400;
+      await new Promise(r => setTimeout(r, 40));
+      const canvas = await buildReceiptCanvas();
+      const imgData = canvas.toDataURL('image/png');
+      const aspectRatio = canvas.height / canvas.width;
+      const pdfWidth = 420;
       const pdfHeight = pdfWidth * aspectRatio;
-      
-      const pdf = new jsPDF({ 
-        orientation: pdfHeight > pdfWidth ? 'portrait' : 'landscape', 
-        unit: 'pt', 
-        format: [pdfWidth, pdfHeight] 
+      const pdf = new jsPDF({
+        orientation: pdfHeight > pdfWidth ? 'portrait' : 'landscape',
+        unit: 'pt',
+        format: [pdfWidth, pdfHeight],
       });
-      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight, undefined, 'FAST');
       pdf.save(`project-receipt-${project.projectId}.pdf`);
     } catch (error) {
       console.error('Error downloading receipt:', error);
@@ -96,100 +107,68 @@ export const ProjectReceiptModal: React.FC<ProjectReceiptModalProps> = ({ projec
   };
 
   const handleShare = async () => {
-    const element = receiptRef.current;
-    if (!element) return;
+    setGeneratingLabel('Preparing receipt…');
     setIsGenerating(true);
     try {
-      // Optimize scale for mobile devices
-      const isMobile = window.innerWidth < 768;
-      const scale = isMobile ? 2 : 3;
-      
-      const canvas = await html2canvas(element, { 
-        scale: scale,
-        useCORS: true,
-        allowTaint: true,
-        backgroundColor: '#1a1818',
-        width: element.offsetWidth,
-        height: element.offsetHeight,
-        logging: false,
-        onclone: (clonedDoc) => {
-          // Ensure all images are loaded in cloned document
-          const clonedElement = clonedDoc.querySelector('[data-receipt]') || clonedDoc.body;
-          const images = clonedElement.querySelectorAll('img');
-          images.forEach((img: HTMLImageElement) => {
-            if (!img.complete) {
-              img.src = img.src;
-            }
-          });
-        }
-      });
-      
-      const imgData = canvas.toDataURL('image/png', 0.95);
-      
-      // Convert to blob
+      await new Promise(r => setTimeout(r, 40));
+      const canvas = await buildReceiptCanvas();
+
+      setGeneratingLabel('Opening share…');
+      // PNG keeps badge colors sharp (JPEG washed out yellow "Fast" text)
       const blob = await new Promise<Blob>((resolve, reject) => {
-        canvas.toBlob((blob) => {
-          if (blob) {
-            resolve(blob);
-          } else {
-            reject(new Error('Failed to create blob'));
-          }
-        }, 'image/png', 0.95);
+        canvas.toBlob(
+          b => (b ? resolve(b) : reject(new Error('Failed to create image'))),
+          'image/png'
+        );
       });
-      
-      // Check for Web Share API support (with files)
-      const shareData: any = {
+
+      const formattedStatus = project.status.charAt(0).toUpperCase() + project.status.slice(1);
+      const money = (n: number) => `LKR ${n.toLocaleString()}`;
+      // Image captions ignore WhatsApp *bold* markers — convert to Unicode styles
+      const captionText = whatsappMarkupToShareText(
+        fillReceiptCaption(getReceiptCaptionForStatus(project.status), {
+          projectId: project.projectId,
+          status: formattedStatus,
+          clientName: project.clientName || '—',
+          clientUniOrg: project.clientUniOrg || '—',
+          types: typeNames.length ? typeNames.join(', ') : '—',
+          deadline: project.deadlineDate
+            ? new Date(project.deadlineDate).toLocaleDateString()
+            : '—',
+          price: money(project.price),
+          advance: money(project.advance),
+          balance: money(balance),
+          website: 'www.ogotechnology.net',
+        })
+      );
+      const shareData: ShareData = {
         title: 'Project Receipt',
-        text: `Project Receipt - ${project.projectId}`,
+        text: captionText,
       };
-      
-      // Try Web Share API with files (for supported browsers)
-      if (navigator.share && navigator.canShare) {
-        try {
-          const file = new File([blob], `project-receipt-${project.projectId}.png`, { 
-            type: 'image/png' 
-          });
-          shareData.files = [file];
-          
-          // Check if files can be shared
-          if (navigator.canShare(shareData)) {
-            await navigator.share(shareData);
-            return;
-          }
-        } catch (shareError) {
-          console.log('File sharing not supported, trying without files');
-        }
-      }
-      
-      // Fallback 1: Try Web Share API without files (text only)
+
       if (navigator.share) {
         try {
-          // Create a data URL for sharing
-          const url = URL.createObjectURL(blob);
-          shareData.url = url;
-          delete shareData.files;
-          
-          await navigator.share(shareData);
-          // Clean up after a delay
-          setTimeout(() => URL.revokeObjectURL(url), 1000);
-          return;
-        } catch (shareError: any) {
-          // If user cancels, don't show error
-          if (shareError.name === 'AbortError') {
+          const file = new File([blob], `project-receipt-${project.projectId}.png`, {
+            type: 'image/png',
+          });
+          const fileShareData = { ...shareData, files: [file] };
+          if (!navigator.canShare || navigator.canShare(fileShareData)) {
+            await navigator.share(fileShareData);
             return;
           }
-          console.log('Share failed');
+        } catch (shareError: any) {
+          if (shareError?.name === 'AbortError') return;
+        }
+
+        try {
+          await navigator.share(shareData);
+          return;
+        } catch (shareError: any) {
+          if (shareError?.name === 'AbortError') return;
         }
       }
-      
-      // Fallback 2: On mobile, don't auto-download - show message instead
-      if (isMobile) {
-        // On mobile, inform user that sharing isn't available
-        alert('Sharing is not available on this device. Please use the Download button instead.');
-        return;
-      }
-      
-      // Fallback 3: Download the image (desktop only)
+
+      // Desktop fallback: download image
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -198,7 +177,6 @@ export const ProjectReceiptModal: React.FC<ProjectReceiptModalProps> = ({ projec
       a.click();
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(url), 100);
-      
     } catch (error) {
       console.error('Error sharing receipt:', error);
       alert('Failed to share receipt. Please try downloading instead.');
@@ -207,105 +185,178 @@ export const ProjectReceiptModal: React.FC<ProjectReceiptModalProps> = ({ projec
     }
   };
 
+  const Row = ({
+    label,
+    value,
+    valueClass = 'text-[#F6E9E9]',
+  }: {
+    label: string;
+    value: React.ReactNode;
+    valueClass?: string;
+  }) => (
+    <div className="flex items-center justify-between gap-2 py-1 leading-normal">
+      <span className="text-[12px] leading-normal text-[#F6E9E9]/50 shrink-0">{label}</span>
+      <span className={`text-[12px] leading-normal font-semibold text-right min-w-0 ${valueClass}`}>
+        {value}
+      </span>
+    </div>
+  );
+
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn">
-        <div className="bg-transparent rounded-2xl p-0 max-w-xs w-full mx-4 shadow-2xl animate-scaleIn relative">
-        {/* Close button */}
-        <button
-          onClick={onClose}
-          className="absolute top-2 right-2 p-2 rounded-full bg-[#E16428]/10 text-[#E16428] hover:bg-[#E16428]/20 transition"
-        >
-          <X className="w-5 h-5" />
-        </button>
-        {/* Receipt content */}
-        <div ref={receiptRef} data-receipt className={`bg-[#1a1818] shadow-lg overflow-hidden font-['Inter'] ${isGenerating ? '' : 'rounded-2xl'}`}>
-          {/* Logo and header */}
-          <div className="flex items-center justify-between pt-6 pb-2 px-6">
-            <img src="/2OGOlogo.png" alt="OGO Technology" className="w-16 h-16 flex-shrink-0" />
-            <div className="flex flex-col items-end text-right">
-              <div className="text-xs font-bold text-[#F6E9E9] mb-1 font-['Poppins'] tracking-tight">ogo Assignment</div>
-              <div className="text-[9px] text-[#E16428] font-bold tracking-widest uppercase mb-1">Department of Academic</div>
-              <div className="text-[9px] text-[#F6E9E9]/80 mb-1 font-semibold">in ogo technology</div>
-              <div className="text-[9px] text-[#F6E9E9]/70">+94 75 930 7059</div>
-            </div>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md animate-fadeIn p-3 sm:p-4"
+      onClick={() => {
+        if (!isGenerating) onClose();
+      }}
+    >
+      <div
+        className="w-full max-w-[320px] sm:max-w-[340px] mx-auto animate-scaleIn relative"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <p className="text-xs font-semibold text-[#F6E9E9] font-['Poppins'] truncate">
+            Receipt · {project.projectId}
+          </p>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isGenerating}
+            className="w-8 h-8 shrink-0 rounded-full bg-[#272121] border border-[#E16428]/25 text-[#F6E9E9]/70 hover:text-[#E16428] transition-colors flex items-center justify-center disabled:opacity-40"
+            aria-label="Close"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        <div className="relative bg-[#161313] overflow-hidden font-['Inter'] shadow-xl rounded-xl ring-1 ring-[#E16428]/20">
+          <div className="h-1 w-full bg-gradient-to-r from-[#E16428] via-[#f08a4b] to-[#E16428]" />
+
+          <img
+            src="/logo_ogo.png"
+            alt="OGO"
+            className="absolute top-3 right-3 w-14 h-14 object-contain z-10"
+          />
+
+          <div className="px-4 pt-4 pb-3.5 pr-[4.5rem]">
+            <p className="text-[13px] leading-normal font-bold text-[#F6E9E9] font-['Poppins']">
+              ogo Assignment
+            </p>
+            <p className="text-[9px] leading-normal text-[#E16428] font-bold uppercase tracking-wider mt-1">
+              Department of Academic
+            </p>
+            <p className="text-[10px] leading-normal text-[#F6E9E9]/40 mt-1">+94 75 930 7059</p>
           </div>
-          {/* Horizontal divider */}
-          <div className="border-t border-[#E16428]/20 mx-6"></div>
-          {/* Details section */}
-          <div className="px-6 pb-1">
-            <div>
-              <div className="flex justify-between py-1.5">
-                <span className="text-[10px] text-[#F6E9E9]/80 font-medium">Project ID</span>
-                <span className="text-[10px] text-[#F6E9E9] font-semibold text-right">{project.projectId}</span>
-              </div>
-              <div className="flex justify-between py-1.5">
-                <span className="text-[10px] text-[#F6E9E9]/80 font-medium">Client</span>
-                <span className="text-[10px] text-[#F6E9E9] font-semibold text-right">{project.clientName}</span>
-              </div>
-              <div className="flex justify-between py-1.5">
-                <span className="text-[10px] text-[#F6E9E9]/80 font-medium">University/Org</span>
-                <span className="text-[10px] text-[#F6E9E9] text-right">{project.clientUniOrg}</span>
-              </div>
-              <div className="flex justify-between py-1.5">
-                <span className="text-[10px] text-[#F6E9E9]/80 font-medium">Project Types</span>
-                <span className="text-[10px] text-[#F6E9E9] text-right">{getProjectTypeNames(project.projectDescription)}</span>
-              </div>
-              <div className="flex justify-between py-1.5">
-                <span className="text-[10px] text-[#F6E9E9]/80 font-medium">Deadline</span>
-                <span className="text-[10px] text-[#F6E9E9] text-right">{new Date(project.deadlineDate).toLocaleDateString()}</span>
-              </div>
-              <div className="flex justify-between py-1.5">
-                <span className="text-[10px] text-[#F6E9E9]/80 font-medium">Price</span>
-                <span className="text-[10px] text-[#F6E9E9] font-bold text-right">LKR {project.price.toLocaleString()}</span>
-              </div>
-              <div className="flex justify-between py-1.5">
-                <span className="text-[10px] text-[#F6E9E9]/80 font-medium">Advance</span>
-                <span className="text-[10px] text-green-400 font-bold text-right">LKR {project.advance.toLocaleString()}</span>
-              </div>
-              <div className="flex justify-between py-1.5">
-                <span className="text-[10px] text-[#F6E9E9]/80 font-medium">Balance</span>
-                <span className="text-[10px] text-red-400 font-bold text-right">LKR {project.balance.toLocaleString()}</span>
-              </div>
-              <div className="flex justify-between py-1.5">
-                <span className="text-[10px] text-[#F6E9E9]/80 font-medium">Status</span>
-                <span className="text-[10px] text-[#F6E9E9] text-right capitalize">{project.status}</span>
-              </div>
-              {project.fastDeliver && (
-                <div className="flex justify-between py-1.5">
-                  <span className="text-[10px] text-[#F6E9E9]/80 font-medium">Fast Deliver</span>
-                  <span className="text-[10px] text-[#F6E9E9] text-right">
-                    <span className="flex items-center justify-end">
-                      <Crown className="w-4 h-4 text-yellow-500 font-bold" strokeWidth={2.5} />
-                    </span>
+
+          <div className="mx-4 border-t border-[#E16428]/15" />
+
+          <div className="px-4 py-2">
+            <Row label="Project ID" value={project.projectId} valueClass="text-[#E16428]" />
+            <Row label="Client Name" value={project.clientName} />
+            <Row label="University / ORG" value={project.clientUniOrg || '—'} />
+            <Row
+              label="Types"
+              value={typeNames.length ? typeNames.join(', ') : '—'}
+              valueClass="text-[#E16428]"
+            />
+            <Row label="Deadline" value={new Date(project.deadlineDate).toLocaleDateString()} />
+          </div>
+
+          <div className="mx-4 border-t border-[#E16428]/15" />
+
+          <div className="px-4 py-2">
+            <Row label="Price" value={`LKR ${project.price.toLocaleString()}`} />
+            {hasDiscount && (
+              <>
+                <Row
+                  label={`Discount${discountPercent ? ` ${discountPercent}%` : ''}`}
+                  value={`− LKR ${discountAmount.toLocaleString()}`}
+                  valueClass="text-emerald-300"
+                />
+                <Row label="Net" value={`LKR ${netPrice.toLocaleString()}`} />
+              </>
+            )}
+            <Row
+              label="Advance"
+              value={`LKR ${project.advance.toLocaleString()}`}
+              valueClass="text-green-400"
+            />
+            <Row
+              label="Balance"
+              value={`LKR ${balance.toLocaleString()}`}
+              valueClass={balance > 0 ? 'text-red-400' : 'text-green-400'}
+            />
+            <Row
+              label="Status"
+              value={project.status}
+              valueClass={statusValueColors[project.status] || 'text-[#F6E9E9]'}
+            />
+            {(project.fastDeliver || hasDiscount) && (
+              <div className="flex flex-wrap gap-1.5 pt-1.5">
+                {project.fastDeliver && (
+                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-yellow-500/15 text-yellow-300 text-[9px] leading-none font-medium border border-yellow-500/25">
+                    <Crown className="w-2.5 h-2.5" /> Fast
                   </span>
-                </div>
-              )}
-            </div>
+                )}
+                {hasDiscount && (
+                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 text-[9px] leading-none font-medium border border-emerald-500/25">
+                    <BadgePercent className="w-2.5 h-2.5" /> −{discountPercent}%
+                  </span>
+                )}
+              </div>
+            )}
           </div>
-          {/* Footer */}
-          <div className={`flex justify-between items-center px-6 py-2 border-t border-[#E16428]/10 bg-[#272121] ${isGenerating ? '' : 'rounded-b-2xl'}`}>
-            <span className="text-[10px] text-[#F6E9E9]/50">Generated on: {new Date().toLocaleDateString()}</span>
-            <span className="text-[10px] text-[#E16428] font-bold">ogo technology</span>
+
+          <div className="flex items-center justify-between gap-2 px-4 py-2.5 border-t border-[#E16428]/12 bg-[#1c1818] rounded-b-xl">
+            <span className="text-[9px] leading-normal text-[#F6E9E9]/40">
+              {new Date().toLocaleDateString(undefined, {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+              })}
+            </span>
+            <span className="text-[9px] leading-normal font-bold text-[#E16428]">ogo technology</span>
           </div>
         </div>
-        {/* Action buttons */}
-        <div className="flex flex-col sm:flex-row justify-center gap-3 p-3 bg-transparent mt-1">
+
+        <div className="grid grid-cols-2 gap-2 mt-2.5">
           <button
+            type="button"
             onClick={handleDownload}
             disabled={isGenerating}
-            className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-[#E16428] text-white rounded-lg shadow hover:bg-[#e16428]/90 transition text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center justify-center gap-1.5 h-10 px-2 bg-[#E16428] text-white rounded-lg hover:bg-[#e16428]/90 active:scale-[0.98] transition text-[11px] font-bold disabled:opacity-50"
           >
-            <Download className="w-4 h-4" /> {isGenerating ? 'Generating...' : 'Download'}
+            {isGenerating ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Download className="w-3.5 h-3.5" />
+            )}
+            Download
           </button>
           <button
+            type="button"
             onClick={handleShare}
             disabled={isGenerating}
-            className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-[#363333] text-white rounded-lg shadow hover:bg-[#272121] transition text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center justify-center gap-1.5 h-10 px-2 bg-[#272121] text-[#F6E9E9] rounded-lg border border-[#E16428]/25 hover:border-[#E16428]/50 active:scale-[0.98] transition text-[11px] font-bold disabled:opacity-50"
           >
-            <Share2 className="w-4 h-4" /> {isGenerating ? 'Sharing...' : 'Share'}
+            {isGenerating ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Share2 className="w-3.5 h-3.5" />
+            )}
+            Share
           </button>
         </div>
+
+        {isGenerating && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center rounded-xl bg-[#161313]/85 backdrop-blur-[2px]">
+            <Loader2 className="w-8 h-8 text-[#E16428] animate-spin" />
+            <p className="mt-3 text-xs font-semibold text-[#F6E9E9] font-['Poppins']">
+              {generatingLabel}
+            </p>
+            <p className="mt-1 text-[10px] text-[#F6E9E9]/45 font-['Inter']">Please wait…</p>
+          </div>
+        )}
       </div>
     </div>
   );
-}; 
+};

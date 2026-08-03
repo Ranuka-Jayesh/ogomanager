@@ -1,13 +1,22 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Calendar, Loader2, Clock, ArrowUp, CalendarDays, ChevronDown, List, PlayCircle, Hourglass, CreditCard, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
-import { Project, Employee } from '../types';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Plus, Calendar, Loader2, ArrowUp, ArrowDown, Hash, ChevronDown, ChevronLeft, ChevronRight, List, PlayCircle, Hourglass, CreditCard, CheckCircle2, AlertTriangle, XCircle, CircleDot } from 'lucide-react';
+import { Project, Employee, EmployeePayment } from '../types';
 import { ProjectModal } from './ProjectModal';
 import { ProjectTable } from './ProjectTable';
 import { useProjectsOffline } from '../hooks/useProjectsOffline';
 import { ProjectReceiptModal } from './ProjectReceiptModal';
 import { PaymentConfirmationModal } from './PaymentConfirmationModal';
+import { EmployeePaymentModal } from './EmployeePaymentModal';
+import { MonthYearNavigator } from './MonthYearNavigator';
 import { supabase } from '../supabaseClient';
 import { useMobileNotifications } from '../hooks/useMobileNotifications';
+import {
+  buildEmployeePayment,
+  getEmployeePaidAmount,
+  getEmployeeRemainingAmount,
+  normalizeEmployeePayment,
+  totalEmployeePaymentAmount,
+} from '../utils/employeePayments';
 
 interface ProjectManagementProps {
   employees: Employee[];
@@ -34,18 +43,23 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [filter, setFilter] = useState<string>('all');
   const [nextProjectId, setNextProjectId] = useState('');
-  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
-  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  const [selectedMonth, setSelectedMonth] = useState<number | 'all'>(new Date().getMonth());
+  const [selectedYear, setSelectedYear] = useState<number | 'all'>(new Date().getFullYear());
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<'deadline-asc' | 'deadline-desc' | 'projectId-asc' | 'projectId-desc'>('deadline-asc');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [receiptProject, setReceiptProject] = useState<Project | null>(null);
   const [paymentConfirmationProject, setPaymentConfirmationProject] = useState<Project | null>(null);
+  const [employeePaymentEdit, setEmployeePaymentEdit] = useState<{
+    project: Project;
+    employeeId: string;
+    employeeName: string;
+    payment: EmployeePayment;
+  } | null>(null);
   const [projectTypes, setProjectTypes] = useState<{ id: string; name: string }[]>([]);
   const [showScrollTop, setShowScrollTop] = useState(false);
-  const [monthDropdownOpen, setMonthDropdownOpen] = useState(false);
-  const [yearDropdownOpen, setYearDropdownOpen] = useState(false);
-  const [filterDropdownOpen, setFilterDropdownOpen] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const recordsPerPage = 7;
   
   // State for employee slideshow - tracks which employee index to show for each project
   const [employeeSlideIndex, setEmployeeSlideIndex] = useState<Record<string, number>>({});
@@ -176,6 +190,12 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
           setPaymentConfirmationProject(null);
         }
       }
+
+      if (e.key === 'Enter' && confirmDeleteId && !isModalOpen) {
+        e.preventDefault();
+        handleDelete(confirmDeleteId);
+        setConfirmDeleteId(null);
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -235,13 +255,9 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
   }, []);
 
   const handleScroll = () => {
-    if (scrollContainerRef.current) {
-      if (scrollContainerRef.current.scrollTop > 300) {
-        setShowScrollTop(true);
-      } else {
-        setShowScrollTop(false);
-      }
-    }
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    setShowScrollTop(el.scrollTop > 40);
   };
 
   const scrollToTop = () => {
@@ -251,24 +267,20 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
     });
   };
 
-  // Calculate year range dynamically for the year dropdown
-  const projectYears = projects
-    .map(p => {
-      if (p.createdAt) {
-        const year = new Date(p.createdAt).getFullYear();
-        return typeof year === 'number' && !isNaN(year) ? year : undefined;
-      }
-      return undefined;
-    })
-    .filter((y): y is number => typeof y === 'number');
-  const minYear = projectYears.length ? Math.min(...projectYears) : new Date().getFullYear() - 3;
-  const maxYear = projectYears.length ? Math.max(...projectYears) : new Date().getFullYear() + 2;
-  const years: number[] = [];
-  for (let y = maxYear; y >= minYear; y--) {
-    years.push(y);
-  }
+  const availableYears = useMemo(() => {
+    const years = new Set<number>();
+    projects.forEach(p => {
+      if (!p.createdAt) return;
+      const y = new Date(p.createdAt).getFullYear();
+      if (Number.isFinite(y)) years.add(y);
+    });
+    if (years.size === 0) years.add(new Date().getFullYear());
+    return Array.from(years).sort((a, b) => b - a);
+  }, [projects]);
 
   useEffect(() => {
+    // Only lock body scroll on desktop; mobile needs native/list scrolling
+    if (typeof window === 'undefined' || window.innerWidth < 1024) return;
     const originalOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
@@ -291,7 +303,9 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
   filteredProjects = filteredProjects.filter(project => {
     if (!project.createdAt) return false;
     const created = new Date(project.createdAt);
-    return created.getMonth() === selectedMonth && created.getFullYear() === selectedYear;
+    const monthOk = selectedMonth === 'all' || created.getMonth() === selectedMonth;
+    const yearOk = selectedYear === 'all' || created.getFullYear() === selectedYear;
+    return monthOk && yearOk;
   });
   if (search.trim()) {
     const searchLower = search.trim().toLowerCase();
@@ -339,6 +353,20 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
     }
     return 0;
   });
+
+  const totalPages = Math.max(1, Math.ceil(filteredProjects.length / recordsPerPage));
+  const paginatedProjects = filteredProjects.slice(
+    (currentPage - 1) * recordsPerPage,
+    currentPage * recordsPerPage
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filter, search, selectedMonth, selectedYear, sortBy]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
 
   // Calculate days remaining until deadline
   const getDaysRemaining = (deadlineDate: string) => {
@@ -399,11 +427,14 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
     setEditingProject(null);
   };
 
-  const handleSave = async (projectData: Omit<Project, 'id'>) => {
+  const handleSave = async (
+    projectData: Omit<Project, 'id'>,
+    qty: number = 1,
+    advanceForIds?: string[]
+  ) => {
     const previousError = error;
     if (editingProject && editingProject.id) {
       await updateProject(editingProject.id, projectData);
-      // Check if operation succeeded (no new error)
       setTimeout(() => {
         if (!error || error === previousError) {
           showNotification(`Project ${projectData.projectId} updated successfully`, 'success', {
@@ -418,16 +449,70 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
         }
       }, 100);
     } else {
-      await addProject(projectData);
-      // Check if operation succeeded
+      const count = Math.max(1, Math.min(50, Math.floor(qty) || 1));
+      const match = projectData.projectId.match(/^PJ(\d+)$/i);
+      const startNum = match ? parseInt(match[1], 10) : NaN;
+      const existingIds = new Set(projects.map(p => p.projectId.toUpperCase()));
+
+      const idsToCreate: string[] = [];
+      if (!isNaN(startNum)) {
+        let n = startNum;
+        while (idsToCreate.length < count) {
+          const candidate = `PJ${n}`;
+          if (!existingIds.has(candidate.toUpperCase())) {
+            idsToCreate.push(candidate);
+            existingIds.add(candidate.toUpperCase());
+          }
+          n += 1;
+          if (n > startNum + count + 1000) break;
+        }
+      } else {
+        idsToCreate.push(projectData.projectId);
+      }
+
+      const advanceIdSet = new Set((advanceForIds || []).map(id => id.toUpperCase()));
+      const discount = projectData.giveDiscount ? (projectData.discountAmount || 0) : 0;
+
+      for (let i = 0; i < idsToCreate.length; i++) {
+        const projectId = idsToCreate[i];
+        const applyAdvance =
+          count === 1 ||
+          advanceForIds === undefined ||
+          advanceIdSet.has(projectId.toUpperCase()) ||
+          (advanceForIds.length > 0 &&
+            idsToCreate.length === advanceForIds.length &&
+            advanceIdSet.has(advanceForIds[i].toUpperCase()));
+
+        const advance = applyAdvance ? projectData.advance : 0;
+        const balance = Math.max(0, projectData.price - advance - discount);
+
+        await addProject({
+          ...projectData,
+          projectId,
+          advance,
+          balance,
+        });
+      }
+
+      const createdLabel =
+        idsToCreate.length <= 3
+          ? idsToCreate.join(', ')
+          : `${idsToCreate[0]} … ${idsToCreate[idsToCreate.length - 1]}`;
+
       setTimeout(() => {
         if (!error || error === previousError) {
-          showNotification(`Project ${projectData.projectId} added successfully`, 'success', {
-            title: 'Manager Pro',
-            icon: '/app.png'
-          });
+          showNotification(
+            idsToCreate.length > 1
+              ? `${idsToCreate.length} projects created (${createdLabel})`
+              : `Project ${projectData.projectId} added successfully`,
+            'success',
+            {
+              title: 'Manager Pro',
+              icon: '/app.png'
+            }
+          );
         } else {
-          showNotification(`Failed to add project ${projectData.projectId}`, 'error', {
+          showNotification(`Failed to add project(s)`, 'error', {
             title: 'Manager Pro',
             icon: '/app.png'
           });
@@ -464,7 +549,8 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
     if (newStatus === 'Delivered') {
       const project = projects.find(p => p.id === projectId);
       if (project) {
-        const remainingBalance = project.price - project.advance;
+        const discount = project.giveDiscount ? (project.discountAmount || 0) : 0;
+        const remainingBalance = project.price - project.advance - discount;
         
         // If there's a remaining balance, show payment confirmation
         if (remainingBalance > 0) {
@@ -495,19 +581,82 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
     }
   };
 
+  /** Open employee payment modal (full / partial / return) */
+  const openEmployeePaymentModal = (project: Project, employeeId: string) => {
+    if (!employeeId) return;
+    const employeeIds = project.assignedTo
+      ? project.assignedTo.split(',').map(id => id.trim()).filter(Boolean)
+      : [];
+    if (!employeeIds.includes(employeeId)) return;
+
+    const existing = project.employeePayments?.find(ep => ep.employeeId === employeeId);
+    const payment =
+      normalizeEmployeePayment(existing) ||
+      buildEmployeePayment(
+        employeeId,
+        employeeIds.length === 1 ? Math.abs(project.paymentOfEmp || 0) : 0,
+        0
+      );
+
+    const emp = employees.find(e => e.id === employeeId);
+    setEmployeePaymentEdit({
+      project,
+      employeeId,
+      employeeName: emp ? `${emp.firstName} ${emp.lastName}` : 'Employee',
+      payment,
+    });
+  };
+
+  const handleEmployeePaymentConfirm = (nextPayment: EmployeePayment) => {
+    if (!employeePaymentEdit) return;
+    const { project, employeeId } = employeePaymentEdit;
+    const employeeIds = project.assignedTo
+      ? project.assignedTo.split(',').map(id => id.trim()).filter(Boolean)
+      : [];
+
+    const nextPayments = employeeIds.map(id => {
+      if (id === employeeId) return nextPayment;
+      const found = project.employeePayments?.find(ep => ep.employeeId === id);
+      return (
+        normalizeEmployeePayment(found) ||
+        buildEmployeePayment(
+          id,
+          employeeIds.length === 1 ? Math.abs(project.paymentOfEmp || 0) : 0,
+          0
+        )
+      );
+    });
+
+    updateProject(project.id, {
+      assignedTo: employeeIds.join(','),
+      employeePayments: nextPayments,
+      paymentOfEmp: totalEmployeePaymentAmount(nextPayments),
+    });
+
+    showNotification(
+      `Employee payment updated for ${project.projectId}`,
+      'info',
+      { title: 'Manager Pro', icon: '/app.png' }
+    );
+    setEmployeePaymentEdit(null);
+  };
+
   const handlePaymentConfirmation = async (customAmount?: number) => {
     if (paymentConfirmationProject) {
       const previousError = error;
       if (customAmount !== undefined) {
         // Partial payment - add custom amount to existing advance
+        const discount = paymentConfirmationProject.giveDiscount
+          ? (paymentConfirmationProject.discountAmount || 0)
+          : 0;
         const newAdvance = paymentConfirmationProject.advance + customAmount;
-        const newBalance = paymentConfirmationProject.price - newAdvance;
+        const newBalance = paymentConfirmationProject.price - discount - newAdvance;
         // If there's still a balance remaining, set status to "Pending Payment"
         const finalStatus = newBalance > 0 ? 'Pending Payment' : 'Delivered';
         await updateProject(paymentConfirmationProject.id, { 
           status: finalStatus,
           advance: newAdvance,
-          balance: newBalance
+          balance: Math.max(0, newBalance)
         });
         setTimeout(() => {
           if (!error || error === previousError) {
@@ -523,10 +672,14 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
           }
         }, 100);
       } else {
-        // Full payment - advance becomes equal to price, balance becomes 0
+        // Full payment - advance matches effective price (after discount), balance 0
+        const discount = paymentConfirmationProject.giveDiscount
+          ? (paymentConfirmationProject.discountAmount || 0)
+          : 0;
+        const effectivePrice = paymentConfirmationProject.price - discount;
         await updateProject(paymentConfirmationProject.id, { 
           status: 'Delivered',
-          advance: paymentConfirmationProject.price,
+          advance: effectivePrice,
           balance: 0
         });
         setTimeout(() => {
@@ -583,222 +736,217 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
     <div 
       ref={scrollContainerRef}
       onScroll={handleScroll}
-      className="space-y-3 sm:space-y-6 animate-fadeIn overflow-y-auto sm:overflow-hidden max-h-[calc(100vh-5rem)] sm:max-h-screen px-2 sm:px-0"
+      className="flex flex-col gap-3 sm:gap-4 w-full min-w-0 h-[calc(100dvh-4.75rem)] sm:h-[calc(100dvh-5.75rem)] lg:h-auto lg:max-h-none overflow-y-auto lg:overflow-visible overscroll-contain animate-fadeIn"
     >
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4">
-        <h1 className="text-xl sm:text-3xl font-bold text-[#F6E9E9] font-['Playfair_Display']">
-          Project Management
-        </h1>
-        <div className="flex flex-col sm:flex-row items-center gap-2 w-full sm:w-auto">
-          {/* Month/Year Filter */}
-          <div className="flex flex-row gap-2 w-full sm:w-auto">
-            {/* Month Dropdown */}
-            <div className="relative flex-1 sm:flex-none sm:w-auto">
-              <button
-                onClick={() => setMonthDropdownOpen(!monthDropdownOpen)}
-                className="w-full sm:w-auto px-3 sm:pl-9 sm:pr-9 py-2.5 sm:py-2 bg-[#272121]/70 border border-[#E16428]/30 rounded-xl sm:rounded-lg text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200 hover:border-[#E16428] focus:ring-2 focus:ring-[#E16428]/30 text-sm flex items-center justify-between gap-2"
-              >
-                <div className="flex items-center gap-2">
-                  <Calendar className="w-4 h-4 text-[#E16428]" />
-                  <span className="hidden sm:inline">{new Date(0, selectedMonth).toLocaleString('default', { month: 'long' })}</span>
-                  <span className="sm:hidden">{new Date(0, selectedMonth).toLocaleString('default', { month: 'short' })}</span>
-                </div>
-                <ChevronDown className={`w-4 h-4 text-[#F6E9E9]/60 transition-transform duration-200 ${monthDropdownOpen ? 'rotate-180' : ''}`} />
-              </button>
-              {monthDropdownOpen && (
-                <>
-                  <div className="fixed inset-0 z-10" onClick={() => setMonthDropdownOpen(false)} />
-                  <div className="absolute z-20 mt-1 w-full min-w-[140px] bg-[#272121] border border-[#E16428]/30 rounded-xl sm:rounded-lg shadow-lg overflow-hidden">
-                    {Array.from({ length: 12 }).map((_, i) => (
-                      <button
-                        key={i}
-                        onClick={() => {
-                          setSelectedMonth(i);
-                          setMonthDropdownOpen(false);
-                        }}
-                        className={`w-full px-4 py-2.5 sm:py-2 text-left flex items-center gap-2 text-[#F6E9E9] hover:bg-[#E16428]/20 transition-colors text-sm ${selectedMonth === i ? 'bg-[#E16428]/20 text-[#E16428]' : ''}`}
-                      >
-                        <CalendarDays className="w-4 h-4" />
-                        <span>{new Date(0, i).toLocaleString('default', { month: 'long' })}</span>
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
+      <div className="flex flex-col gap-3 shrink-0 min-w-0">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 min-w-0">
+          <h1 className="text-xl sm:text-3xl font-bold text-[#F6E9E9] font-['Playfair_Display'] shrink-0">
+            Project Management
+          </h1>
+          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2 w-full sm:w-auto min-w-0">
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Looking for something?"
+              className="project-search-input order-2 sm:order-1 w-full sm:w-64 px-0 py-2.5 sm:py-2 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] font-['Inter'] text-sm placeholder-[#F6E9E9]/35"
+              ref={searchInputRef}
+            />
+
+            <div className="order-1 sm:order-2 w-full sm:w-auto">
+              <MonthYearNavigator
+                selectedMonth={selectedMonth}
+                selectedYear={selectedYear}
+                availableYears={availableYears}
+                onChange={(month, year) => {
+                  setSelectedMonth(month);
+                  setSelectedYear(year);
+                }}
+              />
             </div>
-            
-            {/* Year Dropdown */}
-            <div className="relative flex-1 sm:flex-none sm:w-auto">
+
+            <div className="order-3 flex items-center gap-2 w-full sm:w-auto">
               <button
-                onClick={() => setYearDropdownOpen(!yearDropdownOpen)}
-                className="w-full sm:w-auto px-3 sm:pl-9 sm:pr-9 py-2.5 sm:py-2 bg-[#272121]/70 border border-[#E16428]/30 rounded-xl sm:rounded-lg text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200 hover:border-[#E16428] focus:ring-2 focus:ring-[#E16428]/30 text-sm flex items-center justify-between gap-2"
+                type="button"
+                onClick={() => setSortBy(sortBy === 'deadline-asc' ? 'deadline-desc' : 'deadline-asc')}
+                className={`flex-1 sm:flex-none h-11 sm:h-9 sm:w-9 flex items-center justify-center gap-1.5 sm:gap-0.5 rounded-xl sm:rounded-lg transition-all duration-200 border border-[#E16428]/30 ${
+                  sortBy.startsWith('deadline')
+                    ? 'bg-[#E16428] text-white'
+                    : 'bg-[#272121]/50 text-[#F6E9E9]/70 hover:bg-[#E16428]/20'
+                }`}
+                title={sortBy === 'deadline-asc' ? 'Deadline: earliest first' : sortBy === 'deadline-desc' ? 'Deadline: latest first' : 'Sort by Deadline'}
+                aria-label="Sort by deadline"
               >
-                <div className="flex items-center gap-2">
-                  <Clock className="w-4 h-4 text-[#E16428]" />
-                  <span>{selectedYear}</span>
-                </div>
-                <ChevronDown className={`w-4 h-4 text-[#F6E9E9]/60 transition-transform duration-200 ${yearDropdownOpen ? 'rotate-180' : ''}`} />
+                <Calendar className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
+                {sortBy === 'deadline-desc' ? (
+                  <ArrowDown className="w-3.5 h-3.5 sm:w-3 sm:h-3" />
+                ) : (
+                  <ArrowUp className="w-3.5 h-3.5 sm:w-3 sm:h-3" />
+                )}
               </button>
-              {yearDropdownOpen && (
-                <>
-                  <div className="fixed inset-0 z-10" onClick={() => setYearDropdownOpen(false)} />
-                  <div className="absolute z-20 mt-1 w-full min-w-[120px] bg-[#272121] border border-[#E16428]/30 rounded-xl sm:rounded-lg shadow-lg overflow-hidden max-h-60 overflow-y-auto">
-                    {years.map(year => (
-                      <button
-                        key={year}
-                        onClick={() => {
-                          setSelectedYear(year);
-                          setYearDropdownOpen(false);
-                        }}
-                        className={`w-full px-4 py-2.5 sm:py-2 text-left flex items-center gap-2 text-[#F6E9E9] hover:bg-[#E16428]/20 transition-colors text-sm ${selectedYear === year ? 'bg-[#E16428]/20 text-[#E16428]' : ''}`}
-                      >
-                        <Clock className="w-4 h-4" />
-                        <span>{year}</span>
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
+              <button
+                type="button"
+                onClick={() => setSortBy(sortBy === 'projectId-asc' ? 'projectId-desc' : 'projectId-asc')}
+                className={`flex-1 sm:flex-none h-11 sm:h-9 sm:w-9 flex items-center justify-center gap-1.5 sm:gap-0.5 rounded-xl sm:rounded-lg transition-all duration-200 border border-[#E16428]/30 ${
+                  sortBy.startsWith('projectId')
+                    ? 'bg-[#E16428] text-white'
+                    : 'bg-[#272121]/50 text-[#F6E9E9]/70 hover:bg-[#E16428]/20'
+                }`}
+                title={sortBy === 'projectId-asc' ? 'Project No.: A–Z' : sortBy === 'projectId-desc' ? 'Project No.: Z–A' : 'Sort by Project No.'}
+                aria-label="Sort by project number"
+              >
+                <Hash className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
+                {sortBy === 'projectId-desc' ? (
+                  <ArrowDown className="w-3.5 h-3.5 sm:w-3 sm:h-3" />
+                ) : (
+                  <ArrowUp className="w-3.5 h-3.5 sm:w-3 sm:h-3" />
+                )}
+              </button>
             </div>
-          </div>
-                    {/* Search Bar */}
-          <input
-            type="text"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Looking for something?"
-            className="w-full sm:w-64 px-4 py-3 sm:py-2 bg-[#272121]/70 border border-[#E16428]/30 rounded-xl sm:rounded-lg text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200 mb-2 sm:mb-0 text-sm sm:text-sm"
-            ref={searchInputRef}
-          />
-          {/* Sorting Buttons */}
-        <div className="flex items-center gap-2 w-full sm:w-auto">
-            <button
-              onClick={() => setSortBy(sortBy === 'deadline-asc' ? 'deadline-desc' : 'deadline-asc')}
-              className={`w-1/2 sm:w-auto px-3 py-2 rounded-lg font-['Inter'] text-xs sm:text-sm transition-all duration-200 border border-[#E16428]/30 ${sortBy.startsWith('deadline') ? 'bg-[#E16428] text-white' : 'bg-[#272121]/50 text-[#F6E9E9]/70 hover:bg-[#E16428]/20'}`}
-              title="Sort by Deadline"
-            >
-              <span className="sm:hidden">Dead {sortBy === 'deadline-asc' ? '↑' : '↓'}</span>
-              <span className="hidden sm:inline">Deadline {sortBy === 'deadline-asc' ? 'A-Z' : 'Z-A'}</span>
-            </button>
-            <button
-              onClick={() => setSortBy(sortBy === 'projectId-asc' ? 'projectId-desc' : 'projectId-asc')}
-              className={`w-1/2 sm:w-auto px-3 py-2 rounded-lg font-['Inter'] text-xs sm:text-sm transition-all duration-200 border border-[#E16428]/30 ${sortBy.startsWith('projectId') ? 'bg-[#E16428] text-white' : 'bg-[#272121]/50 text-[#F6E9E9]/70 hover:bg-[#E16428]/20'}`}
-              title="Sort by Project No."
-            >
-              <span className="sm:hidden">ID {sortBy === 'projectId-asc' ? '↑' : '↓'}</span>
-              <span className="hidden sm:inline">Project No. {sortBy === 'projectId-asc' ? 'A-Z' : 'Z-A'}</span>
-            </button>
           </div>
         </div>
-      </div>
 
-      {/* Filter Buttons - Mobile Dropdown */}
-      <div className="relative sm:hidden w-full">
-        <button
-          onClick={() => setFilterDropdownOpen(!filterDropdownOpen)}
-          className="w-full px-4 py-2 rounded-lg bg-[#272121]/50 border border-[#E16428]/30 text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200 flex items-center justify-between"
-        >
-          <div className="flex items-center gap-2">
-            {filter === 'all' && <List className="w-4 h-4" />}
-            {filter === 'Running' && <PlayCircle className="w-4 h-4" />}
-            {filter === 'Pending' && <Hourglass className="w-4 h-4" />}
-            {filter === 'Pending Payment' && <CreditCard className="w-4 h-4" />}
-            {filter === 'Delivered' && <CheckCircle2 className="w-4 h-4" />}
-            {filter === 'Correction' && <AlertTriangle className="w-4 h-4" />}
-            {filter === 'Rejected' && <XCircle className="w-4 h-4" />}
-            <span>{filter === 'all' ? 'All Projects' : filter}</span>
-          </div>
-          <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${filterDropdownOpen ? 'rotate-180' : ''}`} />
-        </button>
-        {filterDropdownOpen && (
-          <>
-            <div className="fixed inset-0 z-10" onClick={() => setFilterDropdownOpen(false)} />
-            <div className="absolute z-20 mt-1 w-full bg-[#272121] border border-[#E16428]/30 rounded-lg shadow-lg overflow-hidden max-h-60 overflow-y-auto">
-              {['all', 'Running', 'Pending', 'Pending Payment', 'Delivered', 'Correction', 'Rejected'].map((status) => {
-                const getIcon = () => {
-                  switch (status) {
-                    case 'all':
-                      return <List className="w-4 h-4" />;
-                    case 'Running':
-                      return <PlayCircle className="w-4 h-4" />;
-                    case 'Pending':
-                      return <Hourglass className="w-4 h-4" />;
-                    case 'Pending Payment':
-                      return <CreditCard className="w-4 h-4" />;
-                    case 'Delivered':
-                      return <CheckCircle2 className="w-4 h-4" />;
-                    case 'Correction':
-                      return <AlertTriangle className="w-4 h-4" />;
-                    case 'Rejected':
-                      return <XCircle className="w-4 h-4" />;
-                    default:
-                      return null;
-                  }
-                };
-
-                return (
-                  <button
-                    key={status}
-                    onClick={() => {
-                      setFilter(status);
-                      setFilterDropdownOpen(false);
-                    }}
-                    className="w-full px-4 py-2 text-left flex items-center gap-2 text-[#F6E9E9] hover:bg-[#E16428]/20 transition-colors"
-                  >
-                    {getIcon()}
-                    <span>{status === 'all' ? 'All Projects' : status}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </>
-        )}
-      </div>
-
-      {/* Filter Buttons - Desktop */}
-      <div className="hidden sm:flex flex-wrap gap-2 sm:gap-4">
-        {['all', 'Running', 'Pending', 'Pending Payment', 'Delivered', 'Correction', 'Rejected'].map((status) => {
+      {/* Filter Buttons - Mobile Icon Tabs (1:1) */}
+      <div className="grid grid-cols-7 gap-1 sm:hidden w-full">
+        {([
+          { status: 'all' as const, activeClass: 'bg-[#E16428]/25 text-[#E16428] border-[#E16428]/50' },
+          { status: 'Running' as const, activeClass: 'bg-blue-500/20 text-blue-300 border-blue-500/40' },
+          { status: 'Pending' as const, activeClass: 'bg-yellow-500/20 text-yellow-300 border-yellow-500/40' },
+          { status: 'Pending Payment' as const, activeClass: 'bg-purple-500/20 text-purple-300 border-purple-500/40' },
+          { status: 'Delivered' as const, activeClass: 'bg-green-500/20 text-green-300 border-green-500/40' },
+          { status: 'Correction' as const, activeClass: 'bg-orange-500/20 text-orange-300 border-orange-500/40' },
+          { status: 'Rejected' as const, activeClass: 'bg-red-500/20 text-red-300 border-red-500/40' },
+        ]).map(({ status, activeClass }) => {
           const getIcon = () => {
             switch (status) {
               case 'all':
-                return <List className="w-4 h-4" />;
+                return <List className="w-3.5 h-3.5" />;
               case 'Running':
-                return <PlayCircle className="w-4 h-4" />;
+                return <PlayCircle className="w-3.5 h-3.5" />;
               case 'Pending':
-                return <Hourglass className="w-4 h-4" />;
+                return <Hourglass className="w-3.5 h-3.5" />;
               case 'Pending Payment':
-                return <CreditCard className="w-4 h-4" />;
+                return <CreditCard className="w-3.5 h-3.5" />;
               case 'Delivered':
-                return <CheckCircle2 className="w-4 h-4" />;
+                return <CheckCircle2 className="w-3.5 h-3.5" />;
               case 'Correction':
-                return <AlertTriangle className="w-4 h-4" />;
+                return <AlertTriangle className="w-3.5 h-3.5" />;
               case 'Rejected':
-                return <XCircle className="w-4 h-4" />;
+                return <XCircle className="w-3.5 h-3.5" />;
               default:
                 return null;
             }
           };
 
+          const label = status === 'all' ? 'All Projects' : status;
+          const active = filter === status;
+
           return (
             <button
               key={status}
+              type="button"
               onClick={() => setFilter(status)}
-              className={`px-3 sm:px-4 py-2 rounded-lg transition-all duration-300 font-['Inter'] text-xs sm:text-sm flex items-center gap-2 ${
-                filter === status
-                  ? 'bg-[#E16428] text-white'
-                  : 'bg-[#272121]/50 text-[#F6E9E9]/70 hover:bg-[#E16428]/20'
+              title={label}
+              aria-label={label}
+              aria-pressed={active}
+              className={`aspect-square w-full p-0 flex items-center justify-center rounded-md border box-border transition-all duration-200 ${
+                active
+                  ? activeClass
+                  : 'bg-[#272121]/50 text-[#F6E9E9]/70 border-[#E16428]/30 hover:bg-[#E16428]/20'
               }`}
             >
               {getIcon()}
-              <span>{status === 'all' ? 'All Projects' : status}</span>
             </button>
           );
         })}
       </div>
 
-      {/* Content: Only show the table view, no cards or view mode toggle */}
+      {/* Filter Buttons - Desktop + pagination */}
+      <div className="hidden sm:flex items-center justify-between gap-3 min-w-0">
+        <div className="flex flex-wrap gap-1.5 md:gap-2 min-w-0 flex-1">
+        {['all', 'Running', 'Pending', 'Pending Payment', 'Delivered', 'Correction', 'Rejected'].map((status) => {
+          const getIcon = () => {
+            switch (status) {
+              case 'all':
+                return <List className="w-3.5 h-3.5 shrink-0" />;
+              case 'Running':
+                return <PlayCircle className="w-3.5 h-3.5 shrink-0" />;
+              case 'Pending':
+                return <Hourglass className="w-3.5 h-3.5 shrink-0" />;
+              case 'Pending Payment':
+                return <CreditCard className="w-3.5 h-3.5 shrink-0" />;
+              case 'Delivered':
+                return <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />;
+              case 'Correction':
+                return <AlertTriangle className="w-3.5 h-3.5 shrink-0" />;
+              case 'Rejected':
+                return <XCircle className="w-3.5 h-3.5 shrink-0" />;
+              default:
+                return null;
+            }
+          };
+
+          const shortLabel =
+            status === 'all' ? 'All' :
+            status === 'Pending Payment' ? 'Payment' :
+            status;
+
+          const active = filter === status;
+          return (
+            <button
+              key={status}
+              onClick={() => setFilter(status)}
+              className={`px-2.5 md:px-3 py-1.5 md:py-2 rounded-none bg-transparent border-0 border-b-2 transition-colors font-['Inter'] text-xs flex items-center gap-1.5 shrink-0 ${
+                active
+                  ? 'border-[#E16428] text-[#E16428]'
+                  : 'border-transparent text-[#F6E9E9]/70 hover:text-[#E16428]'
+              }`}
+            >
+              {getIcon()}
+              <span className="lg:hidden">{shortLabel}</span>
+              <span className="hidden lg:inline">{status === 'all' ? 'All Projects' : status}</span>
+            </button>
+          );
+        })}
+        </div>
+
+        {filteredProjects.length > 0 && totalPages > 1 && (
+          <div className="hidden lg:flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              aria-label="Previous page"
+              title="Previous page"
+              className={`w-8 h-8 flex items-center justify-center rounded-lg bg-[#272121]/60 text-[#F6E9E9]/80 border border-[#E16428]/20 transition-all ${
+                currentPage === 1 ? 'opacity-40 cursor-not-allowed' : 'hover:bg-[#E16428]/20 hover:text-[#E16428]'
+              }`}
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <span className="text-[#F6E9E9]/60 text-xs font-['Inter'] whitespace-nowrap tabular-nums px-1">
+              {currentPage} / {totalPages}
+            </span>
+            <button
+              type="button"
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              aria-label="Next page"
+              title="Next page"
+              className={`w-8 h-8 flex items-center justify-center rounded-lg bg-[#272121]/60 text-[#F6E9E9]/80 border border-[#E16428]/20 transition-all ${
+                currentPage === totalPages ? 'opacity-40 cursor-not-allowed' : 'hover:bg-[#E16428]/20 hover:text-[#E16428]'
+              }`}
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+      </div>
+      </div>
+
+      {/* Content */}
       {filteredProjects.length === 0 ? (
-        <div className="text-center py-12">
+        <div className="text-center py-12 flex-1 min-h-0">
           <div className="text-[#F6E9E9]/70 text-lg font-['Inter'] mb-2">
             {filter === 'all' ? 'No projects found' : `No ${filter.toLowerCase()} projects`}
           </div>
@@ -807,36 +955,98 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
           </div>
         </div>
       ) : (
-        <>
+        <div className="min-w-0 flex flex-col lg:block pb-28 lg:pb-0">
           {/* Mobile: Cute row cards */}
-          <div className="block sm:hidden space-y-3 pb-16 mb-4">
+          <div className="block lg:hidden space-y-3">
             {filteredProjects.map((project) => {
               // Handle multiple employees - split comma-separated IDs (includes payment info)
               const getEmployeeSlideshow = () => {
-                if (!project.assignedTo) return { names: ['Unassigned'], payments: [0], count: 1, currentIndex: 0 };
+                if (!project.assignedTo) {
+                  return {
+                    names: ['Unassigned'],
+                    employeeIds: [] as string[],
+                    payments: [0],
+                    paidAmounts: [0],
+                    statuses: ['paid' as const],
+                    count: 1,
+                    currentIndex: 0,
+                  };
+                }
                 const employeeIds = project.assignedTo.split(',').map(id => id.trim()).filter(Boolean);
-                if (employeeIds.length === 0) return { names: ['Unassigned'], payments: [0], count: 1, currentIndex: 0 };
+                if (employeeIds.length === 0) {
+                  return {
+                    names: ['Unassigned'],
+                    employeeIds: [] as string[],
+                    payments: [0],
+                    paidAmounts: [0],
+                    statuses: ['paid' as const],
+                    count: 1,
+                    currentIndex: 0,
+                  };
+                }
                 const names = employeeIds.map(id => {
                   const emp = employees.find(e => e.id === id);
                   return emp ? `${emp.firstName} ${emp.lastName}` : 'Unknown';
                 });
                 const currentIndex = employeeSlideIndex[project.id] || 0;
-                // Get payments for each employee
                 const payments = employeeIds.map(id => {
                   if (project.employeePayments && project.employeePayments.length > 0) {
                     const empPayment = project.employeePayments.find(ep => ep.employeeId === id);
-                    return empPayment ? empPayment.payment : 0;
+                    const normalized = normalizeEmployeePayment(empPayment);
+                    if (!normalized) return 0;
+                    return Math.abs(normalized.amount ?? normalized.payment ?? 0);
                   }
-                  // Fallback: if only one employee, use total paymentOfEmp
                   if (employeeIds.length === 1) {
-                    return project.paymentOfEmp;
+                    return Math.abs(project.paymentOfEmp);
                   }
                   return 0;
                 });
-                return { names, payments, count: names.length, currentIndex };
+                const paidAmounts = employeeIds.map(id => {
+                  if (project.employeePayments && project.employeePayments.length > 0) {
+                    const empPayment = project.employeePayments.find(ep => ep.employeeId === id);
+                    return getEmployeePaidAmount(normalizeEmployeePayment(empPayment));
+                  }
+                  return 0;
+                });
+                const statuses = employeeIds.map(id => {
+                  if (project.employeePayments && project.employeePayments.length > 0) {
+                    const empPayment = project.employeePayments.find(ep => ep.employeeId === id);
+                    const normalized = normalizeEmployeePayment(empPayment);
+                    return normalized?.status || ('pending' as const);
+                  }
+                  return project.paymentOfEmp < 0 ? 'pending' as const : 'paid' as const;
+                });
+                return { names, employeeIds, payments, paidAmounts, statuses, count: names.length, currentIndex };
               };
-              const { names: empNames, payments: empPayments, count: empCount, currentIndex: empCurrentIndex } = getEmployeeSlideshow();
-              const currentEmpPayment = empPayments[empCurrentIndex] || 0;
+              const {
+                names: empNames,
+                employeeIds: empIds,
+                payments: empPayments,
+                paidAmounts: empPaidAmounts,
+                statuses: empStatuses,
+                count: empCount,
+                currentIndex: empCurrentIndex,
+              } = getEmployeeSlideshow();
+              const currentEmpPayment = empPayments?.[empCurrentIndex] || 0;
+              const currentEmpPaid = empPaidAmounts?.[empCurrentIndex] || 0;
+              const currentEmpRemaining = Math.max(0, currentEmpPayment - currentEmpPaid);
+              const currentEmpStatus = empStatuses?.[empCurrentIndex] || 'pending';
+              const currentEmpId = empIds?.[empCurrentIndex] || '';
+              const currentEmpColor =
+                currentEmpStatus === 'paid'
+                  ? 'text-green-400'
+                  : currentEmpStatus === 'partial'
+                  ? 'text-blue-400'
+                  : 'text-yellow-400';
+              const paymentBalanceSlide = deadlineSlideIndex[project.id] || 0;
+              const showEmpBalance = paymentBalanceSlide === 1 && filter !== 'Pending Payment';
+              const empPayLabel = showEmpBalance ? 'Balance' : 'Emp.Payment';
+              const empPayValue = showEmpBalance ? currentEmpRemaining : currentEmpPayment;
+              const empPayColor = showEmpBalance
+                ? currentEmpRemaining > 0
+                  ? 'text-yellow-400'
+                  : 'text-green-400'
+                : currentEmpColor;
               
               // Handle multiple project types slideshow
               const getTypeSlideshow = () => {
@@ -899,6 +1109,12 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
                             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                             </svg>
+                          </span>
+                        )}
+                        {/* Discount indicator */}
+                        {project.giveDiscount && (
+                          <span className="bg-emerald-500/20 text-emerald-400 px-1.5 py-1 rounded-lg text-[10px] font-semibold">
+                            -{((project.discountAmount || 0)).toLocaleString()}
                           </span>
                         )}
                         
@@ -1064,29 +1280,55 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
 
                         {/* Employee Payment or Balance (if Pending Payment tab) */}
                         <div className="flex items-center gap-2">
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center ${(filter === 'Pending Payment') ? 'bg-yellow-500/20' : (currentEmpPayment < 0 ? 'bg-yellow-500/20' : 'bg-green-500/20')}`}>
-                            <svg className={`w-4 h-4 ${(filter === 'Pending Payment') ? 'text-yellow-400' : (currentEmpPayment < 0 ? 'text-yellow-400' : 'text-green-400')}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
-                            </svg>
-                          </div>
+                          {filter === 'Pending Payment' ? (
+                            <div className="w-8 h-8 rounded-full flex items-center justify-center bg-yellow-500/20">
+                              <svg className="w-4 h-4 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                              </svg>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (currentEmpId) {
+                                  openEmployeePaymentModal(project, currentEmpId);
+                                }
+                              }}
+                              disabled={!currentEmpId}
+                              title="Manage employee payment"
+                              aria-label="Manage employee payment"
+                              className={`size-8 min-w-8 min-h-8 max-w-8 max-h-8 flex-none box-border p-0 inline-flex items-center justify-center rounded-full transition-colors disabled:opacity-40 ${
+                                currentEmpStatus === 'paid'
+                                  ? 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
+                                  : currentEmpStatus === 'partial'
+                                  ? 'bg-blue-500/20 text-blue-400 hover:bg-blue-500/30'
+                                  : 'bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30'
+                              }`}
+                            >
+                              {currentEmpStatus === 'paid' ? (
+                                <CheckCircle2 className="w-4 h-4" />
+                              ) : currentEmpStatus === 'partial' ? (
+                                <CircleDot className="w-4 h-4" />
+                              ) : (
+                                <Hourglass className="w-4 h-4" />
+                              )}
+                            </button>
+                          )}
                           <div className="min-w-0 flex-1">
-                            <p className="text-[#F6E9E9]/60 text-xs">{filter === 'Pending Payment' ? 'Balance' : 'Emp.Payment'}</p>
-                            <div className="text-sm font-medium">
+                            <p className="text-[#F6E9E9]/60 text-xs">
+                              {filter === 'Pending Payment' ? 'Balance' : empPayLabel}
+                            </p>
+                            <div className="text-sm font-medium relative overflow-hidden">
                               {filter === 'Pending Payment' ? (
                                 <span className="text-yellow-400">LKR {(project.balance ?? 0).toLocaleString()}</span>
-                              ) : empCount === 1 ? (
-                                <span className={currentEmpPayment < 0 ? 'text-yellow-400' : 'text-green-400'}>
-                                  LKR {currentEmpPayment.toLocaleString()}
-                                </span>
                               ) : (
-                                <div className="relative overflow-hidden">
-                                  <span 
-                                    key={`${project.id}-payment-${empCurrentIndex}`}
-                                    className={`block animate-slideSwap ${currentEmpPayment < 0 ? 'text-yellow-400' : 'text-green-400'}`}
-                                  >
-                                    LKR {currentEmpPayment.toLocaleString()}
-                                  </span>
-                                </div>
+                                <span
+                                  key={`${project.id}-emppay-${empCurrentIndex}-${paymentBalanceSlide}`}
+                                  className={`block animate-slideSwap ${empPayColor}`}
+                                >
+                                  LKR {empPayValue.toLocaleString()}
+                                </span>
                               )}
                             </div>
                           </div>
@@ -1094,53 +1336,67 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
                       </div>
 
                       {/* Status selector and Actions */}
-                      <div className="flex items-center justify-between pt-2 border-t border-[#E16428]/10">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[#F6E9E9]/60 text-xs">Status:</span>
-                          <select
-                            value={project.status}
-                            onClick={(e) => e.stopPropagation()}
-                            onChange={(e) => handleStatusChange(project.id, e.target.value as Project['status'])}
-                            className={`px-3 py-1.5 rounded-full text-xs font-medium border bg-transparent cursor-pointer transition-all duration-200 ${statusColors[project.status as keyof typeof statusColors] || 'bg-gray-500/20 text-gray-300 border-gray-500/30'}`}
-                          >
-                            {['Running', 'Pending', 'Pending Payment', 'Delivered', 'Correction', 'Rejected'].map((status) => (
-                              <option key={status} value={status} className="bg-[#272121] text-[#F6E9E9]">
-                                {status}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                        
-                        {/* Action buttons */}
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleEdit(project); }}
-                            className="p-2 bg-[#E16428]/20 text-[#E16428] rounded-xl hover:bg-[#E16428]/30 transition-all duration-200 hover:scale-110"
-                            title="Edit Project"
-                          >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                            </svg>
-                          </button>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); setReceiptProject(project); }}
-                            className="p-2 bg-blue-500/20 text-blue-400 rounded-xl hover:bg-blue-500/30 transition-all duration-200 hover:scale-110"
-                            title="View Receipt"
-                          >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                            </svg>
-                          </button>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(project.id); }}
-                            className="p-2 bg-red-500/20 text-red-400 rounded-xl hover:bg-red-500/30 transition-all duration-200 hover:scale-110"
-                            title="Delete Project"
-                          >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                            </svg>
-                          </button>
-                        </div>
+                      <div className="grid grid-cols-9 gap-0.5 pt-2 border-t border-[#E16428]/10">
+                        {([
+                          { status: 'Running' as const, icon: PlayCircle },
+                          { status: 'Pending' as const, icon: Hourglass },
+                          { status: 'Pending Payment' as const, icon: CreditCard },
+                          { status: 'Delivered' as const, icon: CheckCircle2 },
+                          { status: 'Correction' as const, icon: AlertTriangle },
+                          { status: 'Rejected' as const, icon: XCircle },
+                        ]).map(({ status, icon: Icon }) => {
+                          const isActive = project.status === status;
+                          return (
+                            <button
+                              key={status}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleStatusChange(project.id, status);
+                              }}
+                              title={status}
+                              aria-label={status}
+                              aria-pressed={isActive}
+                              className={`aspect-square w-full p-0 flex items-center justify-center rounded-md border box-border transition-all duration-200 ${
+                                isActive
+                                  ? statusColors[status]
+                                  : 'bg-[#272121]/50 text-[#F6E9E9]/50 border-[#E16428]/15 hover:bg-[#E16428]/15 hover:text-[#F6E9E9]/80'
+                              }`}
+                            >
+                              <Icon className="w-3 h-3 shrink-0" />
+                            </button>
+                          );
+                        })}
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); handleEdit(project); }}
+                          className="aspect-square w-full p-0 flex items-center justify-center bg-[#E16428]/20 text-[#E16428] rounded-md border border-[#E16428]/30 box-border hover:bg-[#E16428]/30 transition-all duration-200"
+                          title="Edit Project"
+                        >
+                          <svg className="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); setReceiptProject(project); }}
+                          className="aspect-square w-full p-0 flex items-center justify-center bg-blue-500/20 text-blue-400 rounded-md border border-blue-500/30 box-border hover:bg-blue-500/30 transition-all duration-200"
+                          title="View Receipt"
+                        >
+                          <svg className="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(project.id); }}
+                          className="aspect-square w-full p-0 flex items-center justify-center bg-red-500/20 text-red-400 rounded-md border border-red-500/30 box-border hover:bg-red-500/30 transition-all duration-200"
+                          title="Delete Project"
+                        >
+                          <svg className="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -1148,15 +1404,17 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
               );
             })}
               </div>
-          {/* Desktop/tablet: Table view */}
-          <div className="hidden sm:block">
+          {/* Desktop: Table view */}
+          <div className="hidden lg:block min-w-0 w-full">
             <ProjectTable
-              projects={filteredProjects}
+              projects={paginatedProjects}
               employees={employees}
               onEdit={handleEdit}
               onDelete={handleDelete}
             onUpdateStatus={(id, updates) => updateProject(id, updates)}
             viewFilter={filter}
+            disablePagination
+            recordsPerPage={recordsPerPage}
             />
         </div>
           {/* Receipt Modal (mobile and desktop) */}
@@ -1167,49 +1425,84 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
               onClose={() => setReceiptProject(null)}
             />
           )}
-          {/* Delete Confirmation Modal (mobile and desktop) */}
+          {/* Delete Confirmation Modal */}
           {confirmDeleteId && (
-            <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-fadeIn">
-              <div className="bg-[#272121] rounded-2xl p-6 max-w-md w-full mx-4 border border-[#E16428]/20 shadow-2xl animate-scaleIn">
-                <div className="text-center">
-                  {/* Warning Icon */}
-                  <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4 animate-bounce">
-                    <svg className="w-8 h-8 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9 9 4.03 9 9z" />
+            <div
+              className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fadeIn"
+              onClick={() => setConfirmDeleteId(null)}
+            >
+              <div
+                className="w-full max-w-[280px] p-6 animate-scaleIn text-center"
+                onClick={e => e.stopPropagation()}
+              >
+                <div className="relative mx-auto mb-5 h-[4.5rem] w-[4.5rem]">
+                  <span
+                    className="absolute inset-0 rounded-full border border-red-400/25 opacity-60"
+                    style={{ animation: 'delete-ring 2.4s ease-out infinite' }}
+                  />
+                  <span
+                    className="absolute inset-2 rounded-full border border-[#E16428]/20 opacity-50"
+                    style={{ animation: 'delete-ring 2.4s ease-out 0.6s infinite' }}
+                  />
+                  <div className="relative flex h-full w-full items-center justify-center rounded-full border border-red-400/40 bg-gradient-to-br from-red-500/15 to-transparent">
+                    <svg
+                      className="w-6 h-6 text-red-400"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                      style={{ animation: 'delete-icon 2.8s ease-in-out infinite' }}
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                     </svg>
                   </div>
-                  {/* Title */}
-                  <h3 className="text-xl font-bold text-[#F6E9E9] mb-2 font-['Poppins']">
-                    delete project?
-                  </h3>
-                  {/* Message */}
-                  <p className="text-[#F6E9E9]/70 mb-6 font-['Inter']">
-                    are you sure you want to delete this project?
-                    <br />
-                    <span className="text-xs text-[#F6E9E9]/50">
-                      this action cannot be undone.
-                    </span>
-                  </p>
-                  {/* Buttons */}
-                  <div className="flex space-x-3">
-                    <button
-                      onClick={() => setConfirmDeleteId(null)}
-                      className="flex-1 px-4 py-3 bg-[#363333] text-[#F6E9E9] rounded-lg hover:bg-[#363333]/80 transition-all duration-300 font-['Poppins']"
-                    >
-                      cancel
-                    </button>
-                    <button
-                      onClick={() => { handleDelete(confirmDeleteId); setConfirmDeleteId(null); }}
-                      className="flex-1 px-4 py-3 bg-gradient-to-r from-red-500 to-red-600 text-white rounded-lg hover:scale-105 transition-all duration-300 shadow-lg font-['Poppins']"
-                    >
-                      delete
-                    </button>
-                  </div>
                 </div>
+
+                <h3 className="text-2xl font-semibold tracking-tight text-[#F6E9E9] font-['Playfair_Display']">
+                  Delete project?
+                </h3>
+                <p className="mt-1.5 text-[13px] leading-relaxed text-[#F6E9E9]/55 font-['Inter']">
+                  This removes the project for good. You can’t undo it.
+                </p>
+
+                <div className="mt-6 space-y-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleDelete(confirmDeleteId);
+                      setConfirmDeleteId(null);
+                    }}
+                    className="group w-full flex items-center justify-center gap-2 py-3 border-0 border-b-2 border-red-500/70 rounded-none bg-transparent text-sm font-semibold text-red-400 hover:text-red-300 hover:border-red-400 transition-all duration-200 font-['Inter'] focus:outline-none"
+                  >
+                    Yes, delete
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDeleteId(null)}
+                    className="w-full py-2.5 border-0 border-b border-transparent rounded-none bg-transparent text-sm text-[#F6E9E9]/50 hover:text-[#F6E9E9] hover:border-[#F6E9E9]/25 transition-all duration-200 font-['Inter'] focus:outline-none"
+                  >
+                    Keep project
+                  </button>
+                </div>
+
+                <p className="mt-5 text-[10px] tracking-[0.18em] uppercase text-[#F6E9E9]/25 font-['Inter']">
+                  Esc to keep · Enter to delete
+                </p>
+
+                <style>{`
+                  @keyframes delete-ring {
+                    0% { transform: scale(0.85); opacity: 0.55; }
+                    70% { transform: scale(1.25); opacity: 0; }
+                    100% { transform: scale(1.25); opacity: 0; }
+                  }
+                  @keyframes delete-icon {
+                    0%, 100% { transform: scale(1) rotate(0deg); }
+                    50% { transform: scale(1.08) rotate(-6deg); }
+                  }
+                `}</style>
               </div>
             </div>
           )}
-        </>
+        </div>
       )}
 
       {isModalOpen && (
@@ -1225,15 +1518,33 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
       {paymentConfirmationProject && (
         <PaymentConfirmationModal
           project={paymentConfirmationProject}
-          remainingBalance={paymentConfirmationProject.price - paymentConfirmationProject.advance}
+          remainingBalance={
+            paymentConfirmationProject.price -
+            paymentConfirmationProject.advance -
+            (paymentConfirmationProject.giveDiscount
+              ? paymentConfirmationProject.discountAmount || 0
+              : 0)
+          }
           onConfirm={handlePaymentConfirmation}
           onCancel={handlePaymentCancel}
         />
       )}
 
+      {employeePaymentEdit && (
+        <EmployeePaymentModal
+          projectId={employeePaymentEdit.project.projectId}
+          clientName={employeePaymentEdit.project.clientName}
+          employeeName={employeePaymentEdit.employeeName}
+          payment={employeePaymentEdit.payment}
+          onConfirm={handleEmployeePaymentConfirm}
+          onCancel={() => setEmployeePaymentEdit(null)}
+        />
+      )}
+
       <button
+        type="button"
         onClick={scrollToTop}
-        className={`fixed bottom-6 left-6 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white w-12 h-12 min-w-[3rem] min-h-[3rem] aspect-square rounded-full flex items-center justify-center shadow-lg hover:scale-110 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#E16428] focus:ring-offset-[#272121] transition-all duration-300 z-40 sm:hidden p-0 ${
+        className={`fixed bottom-6 left-6 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white w-12 h-12 min-w-[3rem] min-h-[3rem] aspect-square rounded-full flex items-center justify-center shadow-lg active:scale-95 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#E16428] focus:ring-offset-[#272121] transition-all duration-300 z-[60] lg:hidden p-0 ${
           showScrollTop 
             ? 'opacity-100 translate-y-0 pointer-events-auto' 
             : 'opacity-0 translate-y-4 pointer-events-none'
@@ -1244,16 +1555,14 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
         <ArrowUp className="w-6 h-6" />
       </button>
 
-
-
       <button
+        type="button"
         onClick={handleAdd}
-        className="fixed bottom-6 right-6 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white w-12 h-12 min-w-[3rem] min-h-[3rem] aspect-square rounded-full flex items-center justify-center shadow-lg hover:scale-110 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#E16428] focus:ring-offset-[#272121] transition-all duration-300 z-40 animate-pulse group p-0"
+        className="fixed bottom-6 right-6 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white w-12 h-12 min-w-[3rem] min-h-[3rem] aspect-square rounded-full flex items-center justify-center shadow-lg hover:scale-110 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#E16428] focus:ring-offset-[#272121] transition-all duration-300 z-[60] animate-pulse group p-0 lg:bottom-8 lg:right-8"
         aria-label="Add Project (Alt+A)"
         title="Add New Project (Alt+A)"
       >
         <Plus className="w-6 h-6" />
-        {/* Shortcut indicator */}
         <div className="absolute -top-1 -right-1 bg-[#E16428] text-white text-xs px-1.5 py-0.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-300 font-mono">
           A
         </div>

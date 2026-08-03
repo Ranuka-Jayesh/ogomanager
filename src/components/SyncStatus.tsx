@@ -118,11 +118,13 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
         onMouseLeave={() => setShowTooltip(false)}
         disabled={isSyncing || !isOnline || pendingChanges === 0}
         className={`
-          flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium
+          flex items-center justify-center p-1.5 rounded-full
           transition-all duration-200 border
           ${config.bg} ${config.border} ${config.text}
           ${isOnline && pendingChanges > 0 && !isSyncing ? 'cursor-pointer hover:opacity-80' : 'cursor-default'}
         `}
+        title={config.label}
+        aria-label={config.label}
       >
         <motion.div
           animate={isSyncing ? { rotate: 360 } : {}}
@@ -131,19 +133,15 @@ export const SyncStatus: React.FC<SyncStatusProps> = ({
           <Icon className="w-4 h-4" />
         </motion.div>
 
-        <span>{config.label}</span>
-
-        {/* Sync button for pending changes */}
+        {/* Sync indicator for pending changes */}
         <AnimatePresence>
           {isOnline && pendingChanges > 0 && !isSyncing && (
             <motion.div
               initial={{ opacity: 0, scale: 0 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0 }}
-              className="ml-1"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-            </motion.div>
+              className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-amber-400"
+            />
           )}
         </AnimatePresence>
       </motion.button>

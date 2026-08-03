@@ -16,6 +16,12 @@ import {
   getLastSyncTime,
   SyncOperation,
 } from './offlineStore';
+import {
+  fetchEmployeePaymentsByProject,
+  attachEmployeePaymentsToProjectRows,
+  syncProjectEmployeePayments,
+  parseEmployeePayments,
+} from '../utils/employeePayments';
 
 const MAX_RETRY_COUNT = 3;
 const SYNC_INTERVAL_MS = 30000; // 30 seconds
@@ -186,17 +192,31 @@ class SyncManager {
     switch (type) {
       case 'create': {
         // Remove local-only fields before sending to server
-        const { _localOnly, _deleted, _syncStatus, id, ...createData } = data;
-        const { error } = await supabase.from(table).insert([createData]);
+        const { _localOnly, _deleted, _syncStatus, id, employeePayments, employee_payments, ...createData } = data;
+        const { data: inserted, error } = await supabase
+          .from(table)
+          .insert([createData])
+          .select()
+          .single();
         if (error) throw error;
+        if (table === 'projects' && inserted) {
+          const payments = parseEmployeePayments(employeePayments ?? employee_payments ?? createData.employee_payments);
+          await syncProjectEmployeePayments(inserted.id, payments);
+        }
         break;
       }
 
       case 'update': {
-        const { id, _localOnly, _deleted, _syncStatus, ...updateData } = data;
+        const { id, _localOnly, _deleted, _syncStatus, employeePayments, ...updateData } = data;
         if (!id) throw new Error('Update operation missing id');
         const { error } = await supabase.from(table).update(updateData).eq('id', id);
         if (error) throw error;
+        if (table === 'projects' && (employeePayments !== undefined || updateData.employee_payments !== undefined)) {
+          const payments = parseEmployeePayments(
+            employeePayments ?? updateData.employee_payments
+          );
+          await syncProjectEmployeePayments(id, payments);
+        }
         break;
       }
 
@@ -229,8 +249,10 @@ class SyncManager {
     }
 
     if (projects && projects.length > 0) {
-      await saveProjectsLocally(projects);
-      console.log(`📥 Saved ${projects.length} projects locally`);
+      const paymentsByProject = await fetchEmployeePaymentsByProject();
+      const enriched = attachEmployeePaymentsToProjectRows(projects, paymentsByProject);
+      await saveProjectsLocally(enriched);
+      console.log(`📥 Saved ${enriched.length} projects locally`);
     }
 
     // Fetch employees
@@ -265,7 +287,11 @@ class SyncManager {
       console.log(`📥 Saved ${projectTypes.length} project types locally`);
     }
 
-    this.emit({ type: 'data-updated' });
+    // Only emit data-updated when offline - when online, we don't want to trigger refresh
+    // Data is synced in background but UI should hold current data
+    if (!navigator.onLine) {
+      this.emit({ type: 'data-updated' });
+    }
   }
 
   /**

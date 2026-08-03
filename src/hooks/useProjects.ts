@@ -1,6 +1,14 @@
 import { useState, useEffect } from 'react';
 import { Project } from '../types';
 import { supabase } from '../supabaseClient';
+import {
+  parseEmployeePayments,
+  toEmployeePaymentsJson,
+  totalEmployeePaymentAmount,
+  syncProjectEmployeePayments,
+  fetchEmployeePaymentsByProject,
+  attachEmployeePaymentsToProjectRows,
+} from '../utils/employeePayments';
 
 export const useProjects = () => {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -16,66 +24,63 @@ export const useProjects = () => {
     return 0;
   };
 
-  // Parse employee_payments from JSONB
-  const parseEmployeePayments = (data: any): { employeeId: string; payment: number }[] => {
-    if (!data) return [];
-    if (typeof data === 'string') {
-      try {
-        return JSON.parse(data);
-      } catch {
-        return [];
-      }
-    }
-    if (Array.isArray(data)) return data;
-    return [];
+  const mapProjectFromDB = (project: any): Project => {
+    const employeePayments = parseEmployeePayments(project.employee_payments);
+    return {
+      id: String(project.id),
+      projectId: project.project_id,
+      clientName: project.client_name,
+      clientUniOrg: project.client_uni_org,
+      projectDescription: project.project_description,
+      deadlineDate: project.deadline_date,
+      price: toNumber(project.price),
+      advance: toNumber(project.advance),
+      balance: toNumber(project.balance),
+      assignedTo: project.assigned_to || '',
+      paymentOfEmp:
+        employeePayments.length > 0
+          ? totalEmployeePaymentAmount(employeePayments)
+          : Math.abs(toNumber(project.payment_of_emp)),
+      employeePayments,
+      status: project.status,
+      fastDeliver: project.fast_deliver || false,
+      giveDiscount: project.give_discount || false,
+      discountAmount: toNumber(project.discount_amount),
+      createdAt: project.created_at,
+      updatedAt: project.updated_at,
+    };
   };
 
-  // Map database row to Project object
-  const mapProjectFromDB = (project: any): Project => ({
-    id: project.id,
-    projectId: project.project_id,
-    clientName: project.client_name,
-    clientUniOrg: project.client_uni_org,
-    projectDescription: project.project_description,
-    deadlineDate: project.deadline_date,
-    price: toNumber(project.price),
-    advance: toNumber(project.advance),
-    // Strictly use stored balance from DB
-    balance: toNumber(project.balance),
-    assignedTo: project.assigned_to || '',
-    paymentOfEmp: toNumber(project.payment_of_emp),
-    employeePayments: parseEmployeePayments(project.employee_payments),
-    status: project.status,
-    fastDeliver: project.fast_deliver || false,
-    createdAt: project.created_at,
-    updatedAt: project.updated_at,
-  });
+  const mapProjectToDB = (project: Omit<Project, 'id'>) => {
+    const employeePayments = parseEmployeePayments(project.employeePayments);
+    const paymentOfEmp =
+      employeePayments.length > 0
+        ? totalEmployeePaymentAmount(employeePayments)
+        : Math.abs(project.paymentOfEmp || 0);
+    return {
+      project_id: project.projectId,
+      client_name: project.clientName,
+      client_uni_org: project.clientUniOrg,
+      project_description: project.projectDescription,
+      deadline_date: project.deadlineDate,
+      price: project.price,
+      advance: project.advance,
+      balance: project.balance,
+      assigned_to: project.assignedTo || null,
+      payment_of_emp: paymentOfEmp,
+      employee_payments: toEmployeePaymentsJson(employeePayments),
+      status: project.status,
+      fast_deliver: project.fastDeliver || false,
+      give_discount: project.giveDiscount || false,
+      discount_amount: project.giveDiscount ? (project.discountAmount || 0) : 0,
+    };
+  };
 
-  // Map Project object to database row
-  const mapProjectToDB = (project: Omit<Project, 'id'>) => ({
-    project_id: project.projectId,
-    client_name: project.clientName,
-    client_uni_org: project.clientUniOrg,
-    project_description: project.projectDescription,
-    deadline_date: project.deadlineDate,
-    price: project.price,
-    advance: project.advance,
-    balance: project.balance,
-    assigned_to: project.assignedTo || null,
-    payment_of_emp: project.paymentOfEmp,
-    employee_payments: project.employeePayments && project.employeePayments.length > 0 
-      ? project.employeePayments 
-      : [],
-    status: project.status,
-    fast_deliver: (project as any).fastDeliver || false,
-  });
-
-  // Fetch all projects from database
   const fetchProjects = async () => {
     try {
       setLoading(true);
       setError(null);
-      
+
       const { data, error: fetchError } = await supabase
         .from('projects')
         .select('*')
@@ -87,9 +92,9 @@ export const useProjects = () => {
         return;
       }
 
-      const mappedProjects = (data || []).map(mapProjectFromDB);
-      setProjects(mappedProjects);
-      console.log('Fetched projects:', mappedProjects);
+      const paymentsByProject = await fetchEmployeePaymentsByProject();
+      const enriched = attachEmployeePaymentsToProjectRows(data || [], paymentsByProject);
+      setProjects(enriched.map(mapProjectFromDB));
     } catch (err) {
       console.error('Error in fetchProjects:', err);
       setError('Failed to fetch projects');
@@ -98,16 +103,10 @@ export const useProjects = () => {
     }
   };
 
-  // Add new project to database
   const addProject = async (project: Omit<Project, 'id'>) => {
     try {
       setError(null);
-      
       const projectData = mapProjectToDB(project);
-      
-      // Debug: Log the assignedTo field being saved
-      console.log('Saving project to database with assigned_to:', projectData.assigned_to);
-      console.log('Original project assignedTo:', project.assignedTo);
 
       const { data, error: insertError } = await supabase
         .from('projects')
@@ -121,20 +120,20 @@ export const useProjects = () => {
         return;
       }
 
-      const newProject = mapProjectFromDB(data);
-      setProjects(prev => [newProject, ...prev]);
-      console.log('Added new project:', newProject);
+      await syncProjectEmployeePayments(data.id, parseEmployeePayments(project.employeePayments));
+      const paymentsByProject = await fetchEmployeePaymentsByProject();
+      const [enriched] = attachEmployeePaymentsToProjectRows([data], paymentsByProject);
+      setProjects(prev => [mapProjectFromDB(enriched), ...prev]);
     } catch (err) {
       console.error('Error in addProject:', err);
       setError('Failed to add project');
     }
   };
 
-  // Update project in database
   const updateProject = async (id: string, updates: Partial<Project>) => {
     try {
       setError(null);
-      
+
       const updateData: any = {};
       if (updates.projectId !== undefined) updateData.project_id = updates.projectId;
       if (updates.clientName !== undefined) updateData.client_name = updates.clientName;
@@ -143,20 +142,24 @@ export const useProjects = () => {
       if (updates.deadlineDate !== undefined) updateData.deadline_date = updates.deadlineDate;
       if (updates.price !== undefined) updateData.price = updates.price;
       if (updates.advance !== undefined) updateData.advance = updates.advance;
-      // Only include balance if it's defined and not null
       if (updates.balance !== undefined && updates.balance !== null) {
         updateData.balance = updates.balance;
       }
       if (updates.assignedTo !== undefined) updateData.assigned_to = updates.assignedTo || null;
-      if (updates.paymentOfEmp !== undefined) updateData.payment_of_emp = updates.paymentOfEmp;
-      // Handle employee_payments array
-      if (updates.employeePayments !== undefined) {
-        updateData.employee_payments = updates.employeePayments && updates.employeePayments.length > 0 
-          ? updates.employeePayments 
-          : [];
+      if (updates.paymentOfEmp !== undefined || updates.employeePayments !== undefined) {
+        const payments = parseEmployeePayments(updates.employeePayments);
+        updateData.payment_of_emp =
+          payments.length > 0
+            ? totalEmployeePaymentAmount(payments)
+            : Math.abs(updates.paymentOfEmp ?? 0);
+        updateData.employee_payments = toEmployeePaymentsJson(payments);
       }
       if (updates.status !== undefined) updateData.status = updates.status;
-      if ((updates as any).fastDeliver !== undefined) updateData.fast_deliver = (updates as any).fastDeliver;
+      if (updates.fastDeliver !== undefined) updateData.fast_deliver = updates.fastDeliver;
+      if (updates.giveDiscount !== undefined) updateData.give_discount = updates.giveDiscount;
+      if (updates.discountAmount !== undefined) {
+        updateData.discount_amount = updates.giveDiscount === false ? 0 : updates.discountAmount;
+      }
 
       const { data, error: updateError } = await supabase
         .from('projects')
@@ -167,34 +170,28 @@ export const useProjects = () => {
 
       if (updateError) {
         console.error('Error updating project:', updateError);
-        console.error('Update data being sent:', updateData);
-        console.error('Project ID:', id);
         setError(`Failed to update project: ${updateError.message || 'Unknown error'}`);
         return;
       }
 
-      const updatedProject = mapProjectFromDB(data);
-      setProjects(prev => 
-        prev.map(project => 
-          project.id === id ? updatedProject : project
-        )
-      );
-      console.log('Updated project:', updatedProject);
+      if (updates.employeePayments !== undefined) {
+        await syncProjectEmployeePayments(id, parseEmployeePayments(updates.employeePayments));
+      }
+      const paymentsByProject = await fetchEmployeePaymentsByProject();
+      const [enriched] = attachEmployeePaymentsToProjectRows([data], paymentsByProject);
+      const updatedProject = mapProjectFromDB(enriched);
+      setProjects(prev => prev.map(project => (project.id === id ? updatedProject : project)));
     } catch (err) {
       console.error('Error in updateProject:', err);
       setError('Failed to update project');
     }
   };
 
-  // Delete project from database
   const deleteProject = async (id: string) => {
     try {
       setError(null);
-      
-      const { error: deleteError } = await supabase
-        .from('projects')
-        .delete()
-        .eq('id', id);
+
+      const { error: deleteError } = await supabase.from('projects').delete().eq('id', id);
 
       if (deleteError) {
         console.error('Error deleting project:', deleteError);
@@ -203,25 +200,18 @@ export const useProjects = () => {
       }
 
       setProjects(prev => prev.filter(project => project.id !== id));
-      console.log('Deleted project with ID:', id);
     } catch (err) {
       console.error('Error in deleteProject:', err);
       setError('Failed to delete project');
     }
   };
 
-  // Set up real-time subscriptions
   useEffect(() => {
     fetchProjects();
 
-    // Create a single channel instance
     const channel = supabase.channel('projects_changes');
-    
-    // Subscribe to real-time changes
 
-    // Cleanup subscription on unmount
     return () => {
-      console.log('Cleaning up projects subscription');
       supabase.removeChannel(channel);
     };
   }, []);

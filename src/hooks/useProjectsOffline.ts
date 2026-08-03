@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Project } from '../types';
+import { Project, EmployeePayment } from '../types';
 import { supabase } from '../supabaseClient';
 import { useNetworkStatus } from './useNetworkStatus';
 import {
@@ -19,6 +19,14 @@ import {
 } from '../lib/offlineStore';
 import { syncManager } from '../lib/syncManager';
 import { realtimeManager } from '../lib/realtimeManager';
+import {
+  parseEmployeePayments,
+  toEmployeePaymentsJson,
+  totalEmployeePaymentAmount,
+  syncProjectEmployeePayments,
+  fetchEmployeePaymentsByProject,
+  attachEmployeePaymentsToProjectRows,
+} from '../utils/employeePayments';
 
 // Helper to convert various types to number
 const toNumber = (value: any): number => {
@@ -30,59 +38,69 @@ const toNumber = (value: any): number => {
   return 0;
 };
 
-// Parse employee payments from JSONB
-const parseEmployeePayments = (data: any): { employeeId: string; payment: number }[] => {
-  if (!data) return [];
-  if (typeof data === 'string') {
-    try {
-      return JSON.parse(data);
-    } catch {
-      return [];
-    }
-  }
-  if (Array.isArray(data)) return data;
-  return [];
+const normalizePaymentsList = (payments?: EmployeePayment[]): EmployeePayment[] => {
+  if (!payments?.length) return [];
+  return parseEmployeePayments(payments);
 };
 
 // Map database row to Project object
-const mapProjectFromDB = (project: any): Project => ({
-  id: project.id,
-  projectId: project.project_id,
-  clientName: project.client_name,
-  clientUniOrg: project.client_uni_org,
-  projectDescription: project.project_description,
-  deadlineDate: project.deadline_date,
-  price: toNumber(project.price),
-  advance: toNumber(project.advance),
-  balance: toNumber(project.balance),
-  assignedTo: project.assigned_to || '',
-  paymentOfEmp: toNumber(project.payment_of_emp),
-  employeePayments: parseEmployeePayments(project.employee_payments),
-  status: project.status,
-  fastDeliver: project.fast_deliver || false,
-  createdAt: project.created_at,
-  updatedAt: project.updated_at,
-});
+const mapProjectFromDB = (project: any): Project => {
+  const employeePayments = parseEmployeePayments(
+    project.employeePayments ?? project.employee_payments
+  );
+  const paymentOfEmp =
+    employeePayments.length > 0
+      ? totalEmployeePaymentAmount(employeePayments)
+      : Math.abs(toNumber(project.paymentOfEmp ?? project.payment_of_emp));
+
+  return {
+    id: String(project.id),
+    projectId: project.projectId ?? project.project_id,
+    clientName: project.clientName ?? project.client_name,
+    clientUniOrg: project.clientUniOrg ?? project.client_uni_org,
+    projectDescription: project.projectDescription ?? project.project_description,
+    deadlineDate: project.deadlineDate ?? project.deadline_date,
+    price: toNumber(project.price),
+    advance: toNumber(project.advance),
+    balance: toNumber(project.balance),
+    assignedTo: project.assignedTo ?? project.assigned_to ?? '',
+    paymentOfEmp,
+    employeePayments,
+    status: project.status,
+    fastDeliver: project.fastDeliver ?? project.fast_deliver ?? false,
+    giveDiscount: project.giveDiscount ?? project.give_discount ?? false,
+    discountAmount: toNumber(project.discountAmount ?? project.discount_amount),
+    createdAt: project.createdAt ?? project.created_at,
+    updatedAt: project.updatedAt ?? project.updated_at,
+  };
+};
 
 // Map Project object to database row
-const mapProjectToDB = (project: Omit<Project, 'id'>) => ({
-  project_id: project.projectId,
-  client_name: project.clientName,
-  client_uni_org: project.clientUniOrg,
-  project_description: project.projectDescription,
-  deadline_date: project.deadlineDate,
-  price: project.price,
-  advance: project.advance,
-  balance: project.balance,
-  assigned_to: project.assignedTo || null,
-  payment_of_emp: project.paymentOfEmp,
-  employee_payments:
-    project.employeePayments && project.employeePayments.length > 0
-      ? project.employeePayments
-      : [],
-  status: project.status,
-  fast_deliver: (project as any).fastDeliver || false,
-});
+const mapProjectToDB = (project: Omit<Project, 'id'>) => {
+  const employeePayments = normalizePaymentsList(project.employeePayments);
+  const paymentOfEmp =
+    employeePayments.length > 0
+      ? totalEmployeePaymentAmount(employeePayments)
+      : Math.abs(project.paymentOfEmp || 0);
+
+  return {
+    project_id: project.projectId,
+    client_name: project.clientName,
+    client_uni_org: project.clientUniOrg,
+    project_description: project.projectDescription,
+    deadline_date: project.deadlineDate,
+    price: project.price,
+    advance: project.advance,
+    balance: project.balance,
+    assigned_to: project.assignedTo || null,
+    payment_of_emp: paymentOfEmp,
+    employee_payments: toEmployeePaymentsJson(employeePayments),
+    status: project.status,
+    fast_deliver: project.fastDeliver || false,
+    give_discount: project.giveDiscount || false,
+    discount_amount: project.giveDiscount ? (project.discountAmount || 0) : 0,
+  };
+};
 
 export interface UseProjectsOfflineReturn {
   projects: Project[];
@@ -152,9 +170,11 @@ export const useProjectsOffline = (): UseProjectsOfflineReturn => {
             setError('Failed to fetch projects');
           }
         } else if (data) {
+          const paymentsByProject = await fetchEmployeePaymentsByProject();
+          const enriched = attachEmployeePaymentsToProjectRows(data, paymentsByProject);
           // Save to local and update state
-          await saveProjectsLocally(data);
-          const mappedProjects = data.map(mapProjectFromDB);
+          await saveProjectsLocally(enriched);
+          const mappedProjects = enriched.map(mapProjectFromDB);
           setProjects(mappedProjects);
           setLastSyncTime(Date.now());
           console.log(`🌐 Synced ${mappedProjects.length} projects from server`);
@@ -212,9 +232,19 @@ export const useProjectsOffline = (): UseProjectsOfflineReturn => {
         } else if (data) {
           // Replace temp ID with real ID from server
           await deleteLocalProject(tempId);
-          await saveProjectLocally(data);
+          try {
+            await syncProjectEmployeePayments(
+              data.id,
+              normalizePaymentsList(project.employeePayments)
+            );
+          } catch (payErr) {
+            console.error('Failed to sync employee_payments after create:', payErr);
+          }
+          const paymentsByProject = await fetchEmployeePaymentsByProject();
+          const [enriched] = attachEmployeePaymentsToProjectRows([data], paymentsByProject);
+          await saveProjectLocally(enriched);
           setProjects((prev) =>
-            prev.map((p) => (p.id === tempId ? mapProjectFromDB(data) : p))
+            prev.map((p) => (p.id === tempId ? mapProjectFromDB(enriched) : p))
           );
           console.log('✅ Project created and synced');
         }
@@ -260,14 +290,22 @@ export const useProjectsOffline = (): UseProjectsOfflineReturn => {
       if (updates.advance !== undefined) updateData.advance = updates.advance;
       if (updates.balance !== undefined && updates.balance !== null) updateData.balance = updates.balance;
       if (updates.assignedTo !== undefined) updateData.assigned_to = updates.assignedTo || null;
-      if (updates.paymentOfEmp !== undefined) updateData.payment_of_emp = updates.paymentOfEmp;
-      if (updates.employeePayments !== undefined) {
-        updateData.employee_payments = updates.employeePayments?.length
-          ? updates.employeePayments
-          : [];
+      if (updates.paymentOfEmp !== undefined || updates.employeePayments !== undefined) {
+        const payments = normalizePaymentsList(
+          updates.employeePayments ?? currentProject.employeePayments
+        );
+        updateData.payment_of_emp =
+          payments.length > 0
+            ? totalEmployeePaymentAmount(payments)
+            : Math.abs(updates.paymentOfEmp ?? currentProject.paymentOfEmp ?? 0);
+        updateData.employee_payments = toEmployeePaymentsJson(payments);
       }
       if (updates.status !== undefined) updateData.status = updates.status;
-      if ((updates as any).fastDeliver !== undefined) updateData.fast_deliver = (updates as any).fastDeliver;
+      if (updates.fastDeliver !== undefined) updateData.fast_deliver = updates.fastDeliver;
+      if (updates.giveDiscount !== undefined) updateData.give_discount = updates.giveDiscount;
+      if (updates.discountAmount !== undefined) {
+        updateData.discount_amount = updates.giveDiscount === false ? 0 : updates.discountAmount;
+      }
 
       // Optimistically update state
       const updatedProject = {
@@ -297,9 +335,23 @@ export const useProjectsOffline = (): UseProjectsOfflineReturn => {
           await saveProjectLocally({ ...currentProject, ...updateData, id });
           await updatePendingCount();
         } else if (data) {
-          await saveProjectLocally(data);
+          if (updates.employeePayments !== undefined || updates.paymentOfEmp !== undefined) {
+            try {
+              await syncProjectEmployeePayments(
+                id,
+                normalizePaymentsList(
+                  updates.employeePayments ?? currentProject.employeePayments
+                )
+              );
+            } catch (payErr) {
+              console.error('Failed to sync employee_payments after update:', payErr);
+            }
+          }
+          const paymentsByProject = await fetchEmployeePaymentsByProject();
+          const [enriched] = attachEmployeePaymentsToProjectRows([data], paymentsByProject);
+          await saveProjectLocally(enriched);
           setProjects((prev) =>
-            prev.map((p) => (p.id === id ? mapProjectFromDB(data) : p))
+            prev.map((p) => (p.id === id ? mapProjectFromDB(enriched) : p))
           );
           console.log('✅ Project updated and synced');
         }
@@ -402,8 +454,10 @@ export const useProjectsOffline = (): UseProjectsOfflineReturn => {
     // Subscribe to realtime changes
     const unsubscribe = realtimeManager.subscribeToProjects((event) => {
       console.log('📡 Realtime project update:', event.eventType);
-      // Reload to get latest data
-      loadProjects();
+      // Only reload when offline - when online, realtime updates are handled by sync
+      if (!navigator.onLine) {
+        loadProjects();
+      }
     });
 
     // Subscribe to sync events
@@ -416,8 +470,16 @@ export const useProjectsOffline = (): UseProjectsOfflineReturn => {
         if (event.type === 'sync-complete') {
           setLastSyncTime(Date.now());
         }
+        // Don't refresh when online - data is already synced in background
+        // Only refresh when offline to get latest from IndexedDB
+        if (!navigator.onLine) {
+          loadProjects();
+        }
       } else if (event.type === 'data-updated') {
-        loadProjects();
+        // Only refresh when offline - when online, hold current data
+        if (!navigator.onLine) {
+          loadProjects();
+        }
       }
     });
 
@@ -427,8 +489,14 @@ export const useProjectsOffline = (): UseProjectsOfflineReturn => {
     };
   }, [loadProjects, updatePendingCount]);
 
-  // Auto-sync when coming back online
+  // Auto-sync when coming back online and refresh when going offline
   useEffect(() => {
+    // Detect transition from online to offline - refresh data from IndexedDB
+    if (!isOnline && wasOnline.current) {
+      console.log('📴 Going offline - refreshing from IndexedDB...');
+      loadProjects();
+    }
+
     if (isOnline && !wasOnline.current && pendingChanges > 0) {
       console.log('🌐 Back online with pending changes, syncing...');
       syncNow();
@@ -439,7 +507,7 @@ export const useProjectsOffline = (): UseProjectsOfflineReturn => {
     if (isOnline && !realtimeManager.isConnected()) {
       realtimeManager.initialize();
     }
-  }, [isOnline, pendingChanges]);
+  }, [isOnline, pendingChanges, loadProjects]);
 
   return {
     projects,

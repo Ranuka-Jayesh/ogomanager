@@ -124,10 +124,11 @@ export default defineConfig({
         clientsClaim: true
       },
       
-      // Development options
+      // Keep SW off in dev — avoids empty dev-dist glob warnings.
+      // PWA still builds correctly with `npm run build`.
       devOptions: {
-        enabled: true,
-        type: 'module'
+        enabled: false,
+        type: 'module',
       }
     })
   ],

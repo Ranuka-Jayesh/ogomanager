@@ -24,6 +24,7 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
     whatsappNumber: '',
     emailAddress: '',
     qualifications: '',
+    isActive: true,
   });
 
   useEffect(() => {
@@ -38,6 +39,20 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
         whatsappNumber: employee.whatsappNumber,
         emailAddress: employee.emailAddress,
         qualifications: employee.qualifications,
+        isActive: employee.isActive !== false,
+      });
+    } else {
+      setFormData({
+        employeeId: '',
+        birthday: '',
+        firstName: '',
+        lastName: '',
+        position: '',
+        address: '',
+        whatsappNumber: '',
+        emailAddress: '',
+        qualifications: '',
+        isActive: true,
       });
     }
   }, [employee]);
@@ -195,6 +210,33 @@ export const EmployeeModal: React.FC<EmployeeModalProps> = ({
                 required
               />
             </div>
+
+            <button
+              type="button"
+              role="switch"
+              aria-checked={formData.isActive}
+              onClick={() => setFormData({ ...formData, isActive: !formData.isActive })}
+              className={`w-full flex items-center justify-between px-4 py-3 rounded-lg border transition-colors ${
+                formData.isActive
+                  ? 'border-emerald-500/30 bg-emerald-500/10'
+                  : 'border-[#E16428]/20 bg-[#272121]/50'
+              }`}
+            >
+              <span className="text-sm text-[#F6E9E9] font-['Inter']">
+                {formData.isActive ? 'Active employee' : 'Inactive employee'}
+              </span>
+              <span
+                className={`relative w-10 h-5 rounded-full transition-colors ${
+                  formData.isActive ? 'bg-emerald-500/50' : 'bg-[#F6E9E9]/15'
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                    formData.isActive ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </span>
+            </button>
 
             <div className="flex justify-end space-x-4 pt-6">
               <button

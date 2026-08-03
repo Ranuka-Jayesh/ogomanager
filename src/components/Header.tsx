@@ -1,10 +1,9 @@
 import React, { useState, useRef } from 'react';
-import { Bell, Search, Menu, Wifi, WifiOff, Loader } from 'lucide-react';
+import { Bell, Search } from 'lucide-react';
 import { supabase } from '../supabaseClient';
 import { Project, Employee } from '../types';
 import { useSupabaseConnection } from '../hooks/useSupabaseConnection';
-import { useLastRefresh } from '../contexts/LastRefreshContext';
-import { SyncStatus } from './SyncStatus';
+import { ConnectionStatus } from './ConnectionStatus';
 
 interface SyncProps {
   isOnline: boolean;
@@ -22,8 +21,6 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({ onMenuToggle, syncProps }) => {
   const { status, isConnected, lastPing } = useSupabaseConnection();
-  const { lastRefresh } = useLastRefresh();
-  const [showLastUpdateTooltip, setShowLastUpdateTooltip] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchValue, setSearchValue] = useState('');
   const [searchResults, setSearchResults] = useState<Project[]>([]);
@@ -336,30 +333,35 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle, syncProps }) => {
   return (
     <>
     <header className="fixed top-0 left-0 right-0 z-50 backdrop-blur-md bg-[#363333]/20 border-b border-[#E16428]/20">
-      <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4">
-        <div className="flex items-center space-x-3 sm:space-x-4 lg:-ml-4 xl:-ml-6">
+      <div className="flex items-center justify-between px-4 sm:px-6 py-1 sm:py-1.5">
+        <div className="flex items-center space-x-2 sm:space-x-3 lg:-ml-4 xl:-ml-6">
           {/* Mobile Menu Button */}
           <button
             onClick={onMenuToggle}
-            className="lg:hidden p-2 bg-[#272121]/50 border border-[#E16428]/20 rounded-lg hover:bg-[#E16428]/10 transition-all duration-300"
+            className="lg:hidden p-1.5 text-[#F6E9E9] hover:text-[#E16428] transition-colors duration-300"
+            aria-label="Open menu"
           >
-            <Menu className="w-5 h-5 text-[#F6E9E9]" />
+            <span className="flex flex-col items-start justify-center gap-[5px] w-5">
+              <span className="block h-[2.5px] w-full rounded-full bg-current" />
+              <span className="block h-[2.5px] w-[75%] rounded-full bg-current" />
+              <span className="block h-[2.5px] w-[50%] rounded-full bg-current" />
+            </span>
           </button>
 
           {/* Desktop Sidebar Toggle */}
             {/* Removed sidebar toggle button */}
 
-          <div className="flex items-center space-x-3">
+          <div className="flex items-center space-x-2.5 sm:space-x-3">
             <img
-              src="/2OGOlogo.png"
+              src="/logo_ogo.png"
               alt="OGO Logo"
-              className="w-10 h-10 sm:w-12 sm:h-12 object-contain rounded-xl shadow-lg p-1 border-0 sm:border-2 sm:border-white"
+              className="w-14 h-14 sm:w-16 sm:h-16 object-contain"
             />
-            <div className="hidden sm:block">
-              <h1 className="text-lg sm:text-xl font-bold text-[#F6E9E9] font-['Playfair_Display']">
+            <div className="hidden sm:block leading-tight">
+              <h1 className="text-base sm:text-lg font-bold text-[#F6E9E9] font-['Playfair_Display'] leading-tight">
                   Manager Pro
               </h1>
-              <p className="text-xs text-[#F6E9E9]/70 font-['Inter']">
+              <p className="text-[11px] text-[#F6E9E9]/70 font-['Inter'] leading-tight">
                   online sales management
               </p>
             </div>
@@ -368,13 +370,13 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle, syncProps }) => {
 
         <div className="flex items-center space-x-2 sm:space-x-4">
           <div className="relative hidden sm:block">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-[#F6E9E9]/50" />
+            <Search className="absolute left-0 top-1/2 -translate-y-1/2 w-4 h-4 text-[#F6E9E9]/50 pointer-events-none" />
             <input
               type="text"
               placeholder="Looking for something?"
-                className="pl-10 pr-4 py-2 w-48 lg:w-64 bg-[#272121]/50 border border-[#E16428]/20 rounded-lg text-[#F6E9E9] placeholder-[#F6E9E9]/50 focus:outline-none focus:border-[#E16428] transition-all duration-300 font-['Inter'] cursor-pointer"
-                onFocus={() => setSearchOpen(true)}
-                readOnly
+              className="underline-field pl-7 pr-0 py-2 w-48 lg:w-64 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] placeholder-[#F6E9E9]/50 font-['Inter'] cursor-pointer"
+              onFocus={() => setSearchOpen(true)}
+              readOnly
             />
           </div>
           
@@ -386,64 +388,16 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle, syncProps }) => {
             <Search className="w-5 h-5 text-[#F6E9E9]" />
           </button>
 
-            {/* Database Connectivity Icon */}
-            <div 
-              className="relative p-2 bg-[#272121]/50 border border-[#E16428]/20 rounded-lg hover:bg-[#E16428]/10 transition-all duration-300 flex items-center justify-center group cursor-pointer sm:cursor-default"
-              onClick={() => {
-                // Toggle on click for mobile only
-                if (window.innerWidth < 640) {
-                  setShowLastUpdateTooltip(!showLastUpdateTooltip);
-                }
-              }}
-            >
-              {status === 'connecting' ? (
-                <Loader className="w-5 h-5 text-[#F6E9E9] animate-spin" />
-              ) : isConnected ? (
-                <Wifi className="w-5 h-5 text-green-400" />
-              ) : (
-                <WifiOff className="w-5 h-5 text-red-400" />
-              )}
-              <span 
-                className={`absolute -top-1 -right-1 w-3 h-3 rounded-full border-2 border-[#272121] ${
-                  status === 'connecting' 
-                    ? 'bg-yellow-500 animate-pulse' 
-                    : isConnected 
-                    ? 'bg-green-500' 
-                    : 'bg-red-500'
-                }`}
-              ></span>
-              {/* Tooltip - Show on hover (desktop) or click (mobile) */}
-              <div className={`absolute top-full right-0 mt-2 px-2 py-1 bg-[#272121] text-[#F6E9E9] text-xs rounded z-50 pointer-events-none ${
-                showLastUpdateTooltip 
-                  ? 'opacity-100' 
-                  : 'opacity-0 sm:group-hover:opacity-100'
-              } transition-opacity duration-200`}>
-                <div>
-                  {status === 'connecting' 
-                    ? 'Connecting...' 
-                    : isConnected 
-                    ? (
-                        <>
-                          <div className="whitespace-nowrap">Connected{lastPing ? ` (${lastPing.toLocaleTimeString()})` : ''}</div>
-                        </>
-                      )
-                    : 'Disconnected'
-                  }
-                </div>
-              </div>
-            </div>
-
-            {/* Sync Status - After WiFi */}
-            {syncProps && (
-              <SyncStatus
-                isOnline={syncProps.isOnline}
-                pendingChanges={syncProps.pendingChanges}
-                onSync={syncProps.onSync}
-                isSyncing={syncProps.isSyncing}
-                lastSyncTime={syncProps.lastSyncTime}
-                showDetails={true}
-              />
-            )}
+            <ConnectionStatus
+              dbStatus={status}
+              isDbConnected={isConnected}
+              lastPing={lastPing}
+              isOnline={syncProps?.isOnline ?? true}
+              pendingChanges={syncProps?.pendingChanges ?? 0}
+              isSyncing={syncProps?.isSyncing ?? false}
+              lastSyncTime={syncProps?.lastSyncTime ?? null}
+              onSync={syncProps?.onSync}
+            />
 
           <button 
             className="relative p-2 bg-[#272121]/50 border border-[#E16428]/20 rounded-lg hover:bg-[#E16428]/10 transition-all duration-300 group"
@@ -487,119 +441,129 @@ export const Header: React.FC<HeaderProps> = ({ onMenuToggle, syncProps }) => {
         </div>
       </div>
     </header>
-      {/* Fullscreen Glassy Search Modal */}
+      {/* Fullscreen Search Modal */}
       {searchOpen && (
         <div
           className="fixed inset-0 z-[999] flex items-center justify-center bg-black/40 backdrop-blur-xl animate-fadeIn"
           onClick={() => setSearchOpen(false)}
         >
           <div
-            className="bg-[#232021]/80 rounded-2xl shadow-2xl p-8 w-full max-w-xl mx-4 flex flex-col items-center relative border border-[#E16428]/20"
+            className="w-full max-w-xl mx-4 flex flex-col relative"
             onClick={e => e.stopPropagation()}
           >
             <button
-              className="absolute top-4 right-4 p-2 bg-[#272121]/60 text-[#F6E9E9] rounded-lg hover:bg-[#E16428]/20 transition-all duration-300"
+              className="absolute -top-10 right-0 p-1.5 text-[#F6E9E9]/60 hover:text-[#E16428] transition-colors duration-200"
               onClick={() => setSearchOpen(false)}
               aria-label="Close search"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
-            <div className="flex flex-col items-center w-full">
-              <Search className="w-6 h-6 text-[#E16428] mb-4" />
-              <input
-                ref={inputRef}
-                autoFocus
-                type="text"
-                value={searchValue}
-                onChange={e => setSearchValue(e.target.value)}
-                placeholder="Looking for something?"
-                className="w-full px-6 py-4 rounded-xl bg-[#272121]/80 border border-[#E16428]/30 text-[#F6E9E9] placeholder-[#F6E9E9]/50 focus:outline-none focus:border-[#E16428] text-lg font-['Inter'] shadow-lg mb-2"
-              />
-              {/* Results Dropdown */}
-              <div className="w-full max-h-72 overflow-y-auto mt-2 rounded-xl bg-[#1a1818]/90 border border-[#E16428]/10 shadow-xl">
-                {loading ? (
-                  <div className="p-6 text-center text-[#E16428] font-bold animate-pulse">Searching...</div>
-                ) : noResults ? (
-                  <div className="p-6 text-center text-[#F6E9E9]/60 font-['Inter']">No results found</div>
-                ) : (
-                  searchResults.map((project: any) => {
-                    // Map database fields to display format
-                    const mappedProject = {
-                      id: project.id,
-                      projectId: project.project_id,
-                      clientName: project.client_name,
-                      clientUniOrg: project.client_uni_org,
-                      projectDescription: project.project_description,
-                      deadlineDate: project.deadline_date,
-                      price: project.price,
-                      advance: project.advance,
-                      assignedTo: project.assigned_to,
-                      paymentOfEmp: project.payment_of_emp,
-                      status: project.status,
-                      fastDeliver: project.fast_deliver || false,
-                      createdAt: project.created_at,
-                      updatedAt: project.updated_at,
-                    };
-                    
-                    const emp = employees.find(e => e.id === mappedProject.assignedTo);
-                    return (
-                      <div
-                        key={mappedProject.id}
-                        className="flex flex-col gap-1 px-6 py-3 border-b border-[#E16428]/10 hover:bg-[#E16428]/10 cursor-pointer transition-all duration-200 group"
-                        onClick={() => {
-                          setSearchOpen(false);
-                          setSearchValue('');
-                          // Extract month and year from project creation date
-                          const projectDate = mappedProject.createdAt ? new Date(mappedProject.createdAt) : new Date();
-                          const projectMonth = projectDate.getMonth(); // 0-11
-                          const projectYear = projectDate.getFullYear();
-                          
-                          // Store project ID, month, and year in sessionStorage for persistence across page switches
-                          sessionStorage.setItem('pendingProjectSearch', mappedProject.projectId);
-                          sessionStorage.setItem('pendingProjectMonth', projectMonth.toString());
-                          sessionStorage.setItem('pendingProjectYear', projectYear.toString());
-                          
-                          // Dispatch event to switch to projects tab
-                          window.dispatchEvent(new CustomEvent('switchToProjectsTab'));
-                          // Dispatch event with project ID, month, and year to filter in ProjectManagement (if already mounted)
-                          window.dispatchEvent(new CustomEvent('searchProjectById', { 
-                            detail: { 
-                              projectId: mappedProject.projectId,
-                              month: projectMonth,
-                              year: projectYear
-                            } 
-                          }));
-                        }}
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-[#F6E9E9] text-sm truncate max-w-[120px]">
-                            {mappedProject.clientName}
-                          </span>
-                          <span className="ml-auto text-xs text-[#E16428] font-semibold">
-                            {mappedProject.projectId}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-[#F6E9E9]/70">
-                            {emp ? `${emp.firstName} ${emp.lastName}` : 'Unassigned'}
-                          </span>
-                          <span className="ml-auto text-xs text-[#F6E9E9]/40">
-                            {new Date(mappedProject.deadlineDate).toLocaleDateString()}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-[#F6E9E9]/60">
-                            {mappedProject.clientUniOrg}
-                          </span>
-                          <span className="ml-auto text-xs text-[#F6E9E9]/50">
-                            {mappedProject.status}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
+            <div className="flex flex-col w-full">
+              <div className="relative w-full">
+                <Search className="absolute left-0 top-1/2 -translate-y-1/2 w-5 h-5 text-[#E16428] pointer-events-none" />
+                <input
+                  ref={inputRef}
+                  autoFocus
+                  type="text"
+                  value={searchValue}
+                  onChange={e => setSearchValue(e.target.value)}
+                  placeholder="Looking for something?"
+                  className="underline-field w-full pl-8 pr-0 py-3 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] placeholder-[#F6E9E9]/50 focus:border-[#E16428] text-lg font-['Inter'] transition-[border-color]"
+                />
               </div>
+              {/* Results */}
+              {(loading || noResults || searchResults.length > 0) && (
+                <div className="w-full max-h-72 overflow-y-auto mt-1">
+                  {loading ? (
+                    <div className="py-5 text-center text-[#E16428]/80 font-['Inter'] text-sm animate-pulse">
+                      Searching...
+                    </div>
+                  ) : noResults ? (
+                    <div className="py-5 text-center text-[#F6E9E9]/50 font-['Inter'] text-sm">
+                      No results found
+                    </div>
+                  ) : (
+                    searchResults.map((project: any) => {
+                      // Map database fields to display format
+                      const mappedProject = {
+                        id: project.id,
+                        projectId: project.project_id,
+                        clientName: project.client_name,
+                        clientUniOrg: project.client_uni_org,
+                        projectDescription: project.project_description,
+                        deadlineDate: project.deadline_date,
+                        price: project.price,
+                        advance: project.advance,
+                        assignedTo: project.assigned_to,
+                        paymentOfEmp: project.payment_of_emp,
+                        status: project.status,
+                        fastDeliver: project.fast_deliver || false,
+                        giveDiscount: project.give_discount || false,
+                        discountAmount: project.discount_amount || 0,
+                        createdAt: project.created_at,
+                        updatedAt: project.updated_at,
+                      };
+                      
+                      const emp = employees.find(e => e.id === mappedProject.assignedTo);
+                      return (
+                        <div
+                          key={mappedProject.id}
+                          className="flex flex-col gap-1 px-0 py-3 border-b border-[#E16428]/15 hover:border-[#E16428]/40 cursor-pointer transition-colors duration-200 group"
+                          onClick={() => {
+                            setSearchOpen(false);
+                            setSearchValue('');
+                            // Extract month and year from project creation date
+                            const projectDate = mappedProject.createdAt ? new Date(mappedProject.createdAt) : new Date();
+                            const projectMonth = projectDate.getMonth(); // 0-11
+                            const projectYear = projectDate.getFullYear();
+                            
+                            // Store project ID, month, and year in sessionStorage for persistence across page switches
+                            sessionStorage.setItem('pendingProjectSearch', mappedProject.projectId);
+                            sessionStorage.setItem('pendingProjectMonth', projectMonth.toString());
+                            sessionStorage.setItem('pendingProjectYear', projectYear.toString());
+                            
+                            // Dispatch event to switch to projects tab
+                            window.dispatchEvent(new CustomEvent('switchToProjectsTab'));
+                            // Dispatch event with project ID, month, and year to filter in ProjectManagement (if already mounted)
+                            window.dispatchEvent(new CustomEvent('searchProjectById', { 
+                              detail: { 
+                                projectId: mappedProject.projectId,
+                                month: projectMonth,
+                                year: projectYear
+                              } 
+                            }));
+                          }}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-[#F6E9E9] text-sm truncate max-w-[120px] group-hover:text-[#E16428] transition-colors">
+                              {mappedProject.clientName}
+                            </span>
+                            <span className="ml-auto text-xs text-[#E16428] font-semibold">
+                              {mappedProject.projectId}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-[#F6E9E9]/70">
+                              {emp ? `${emp.firstName} ${emp.lastName}` : 'Unassigned'}
+                            </span>
+                            <span className="ml-auto text-xs text-[#F6E9E9]/40">
+                              {new Date(mappedProject.deadlineDate).toLocaleDateString()}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-[#F6E9E9]/60">
+                              {mappedProject.clientUniOrg}
+                            </span>
+                            <span className="ml-auto text-xs text-[#F6E9E9]/50">
+                              {mappedProject.status}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>

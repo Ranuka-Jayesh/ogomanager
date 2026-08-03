@@ -1,13 +1,20 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import ReactDOM from 'react-dom';
-import { DollarSign, Clock, CheckCircle, AlertCircle, Calendar, CalendarDays, ChevronDown, TrendingUp, FolderOpen, Eye, EyeOff, X, Lock, Fingerprint } from 'lucide-react';
+import { DollarSign, Clock, CheckCircle, AlertCircle, FolderOpen, Eye, EyeOff, X, Lock, Fingerprint, KeyRound } from 'lucide-react';
 import { Project, Employee } from '../types';
 import { GlassCard } from './GlassCard';
+import { MonthYearNavigator } from './MonthYearNavigator';
 import { useSupabaseConnection } from '../hooks/useSupabaseConnection';
 import { supabase } from '../supabaseClient';
 import { useLastRefresh } from '../contexts/LastRefreshContext';
 import { useBiometricAuth } from '../hooks/useBiometricAuth';
 import { useMobileDetection } from '../hooks/useMobileDetection';
+import {
+  authenticateWithPin,
+  getLastLoginEmail,
+  getStoredPinLength,
+  loadAdminSecurity,
+} from '../utils/adminSecurity';
 
 interface DashboardProps {
   projects: Project[];
@@ -21,13 +28,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
   const isMobile = useMobileDetection();
   const { isSupported: biometricSupported, hasCredentials: hasBiometric, authenticateBiometric } = useBiometricAuth();
   const now = new Date();
-  const [selectedMonth, setSelectedMonth] = useState(now.getMonth());
-  const [selectedYear, setSelectedYear] = useState(now.getFullYear());
+  const [selectedMonth, setSelectedMonth] = useState<number | 'all'>(now.getMonth());
+  const [selectedYear, setSelectedYear] = useState<number | 'all'>(now.getFullYear());
   const [projectTypes, setProjectTypes] = React.useState<{ id: string; name: string }[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [monthDropdownOpen, setMonthDropdownOpen] = useState(false);
-  const [yearDropdownOpen, setYearDropdownOpen] = useState(false);
-  const [pendingCardSlide, setPendingCardSlide] = useState(0); // 0 = Pending Payments, 1 = Total Upcoming
   const [completedCardSlide, setCompletedCardSlide] = useState(0); // 0 = Completed Projects, 1 = Running Projects
   
   // Privacy/Hide values state
@@ -36,30 +40,50 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [isBiometricLoading, setIsBiometricLoading] = useState(false);
+  const [pinEnabled, setPinEnabled] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+  const [isVerifying, setIsVerifying] = useState(false);
+
+  const getSessionEmail = (): string | null => {
+    try {
+      const raw = localStorage.getItem('ogo_session');
+      if (raw) {
+        const s = JSON.parse(raw);
+        if (typeof s?.email === 'string') return s.email;
+      }
+    } catch {
+      /* ignore */
+    }
+    return getLastLoginEmail();
+  };
+
+  const revealValues = () => {
+    setValuesHidden(false);
+    setShowPasswordModal(false);
+    setPasswordInput('');
+    setPinInput('');
+    setPasswordError('');
+  };
 
   // Filter projects by selected month and year (for stats cards)
   const filteredProjects = projects.filter(project => {
     if (!project.createdAt) return false;
     const created = new Date(project.createdAt);
-    return created.getMonth() === selectedMonth && created.getFullYear() === selectedYear;
+    const monthOk = selectedMonth === 'all' || created.getMonth() === selectedMonth;
+    const yearOk = selectedYear === 'all' || created.getFullYear() === selectedYear;
+    return monthOk && yearOk;
   });
 
-  // Calculate year range dynamically for the year dropdown
-  const projectYears = projects
-    .map(p => {
-      if (p.createdAt) {
-        const year = new Date(p.createdAt).getFullYear();
-        return typeof year === 'number' && !isNaN(year) ? year : undefined;
-      }
-      return undefined;
-    })
-    .filter((y): y is number => typeof y === 'number');
-  const minYear = projectYears.length ? Math.min(...projectYears) : now.getFullYear() - 3;
-  const maxYear = projectYears.length ? Math.max(...projectYears) : now.getFullYear() + 2;
-  const years: number[] = [];
-  for (let y = maxYear; y >= minYear; y--) {
-    years.push(y);
-  }
+  const availableYears = useMemo(() => {
+    const years = new Set<number>();
+    projects.forEach(p => {
+      if (!p.createdAt) return;
+      const y = new Date(p.createdAt).getFullYear();
+      if (Number.isFinite(y)) years.add(y);
+    });
+    if (years.size === 0) years.add(new Date().getFullYear());
+    return Array.from(years).sort((a, b) => b - a);
+  }, [projects]);
 
   const totalRevenue = filteredProjects.reduce((sum, project) => sum + project.price, 0);
   const completedProjects = filteredProjects.filter(p => p.status === 'Delivered' || p.status === 'Pending Payment').length;
@@ -84,14 +108,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
       return sum + balance;
     }, 0);
 
-  // Auto-slide effect for the pending payments card
-  useEffect(() => {
-    const slideInterval = setInterval(() => {
-      setPendingCardSlide(prev => (prev === 0 ? 1 : 0));
-    }, 4000); // Switch every 4 seconds
-
-    return () => clearInterval(slideInterval);
-  }, []);
+  // Pending / total outstanding (pending + upcoming), no text labels on the amounts
+  const totalOutstanding = totalPendingPayments + totalUpcoming;
 
   // Auto-slide effect for the completed/running projects card
   useEffect(() => {
@@ -160,46 +178,90 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
   }, [handleRefresh]);
 
   // Handle visibility toggle
-  const handleToggleVisibility = () => {
+  const handleToggleVisibility = async () => {
     if (valuesHidden) {
-      // Show password modal to reveal values
       setShowPasswordModal(true);
       setPasswordInput('');
+      setPinInput('');
       setPasswordError('');
+      const email = getSessionEmail();
+      if (email) {
+        const prefs = await loadAdminSecurity(email);
+        setPinEnabled(prefs.pinEnabled);
+      } else {
+        setPinEnabled(false);
+      }
     } else {
-      // Hide values immediately
       setValuesHidden(true);
     }
   };
 
-  // Handle password verification
+  // Handle password verification (admin table)
   const handlePasswordSubmit = async () => {
+    setIsVerifying(true);
+    setPasswordError('');
     try {
-      // Get current user's email
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user?.email) {
+      const email = getSessionEmail();
+      if (!email) {
         setPasswordError('Unable to verify user');
         return;
       }
 
-      // Re-authenticate with Supabase
-      const { error } = await supabase.auth.signInWithPassword({
-        email: user.email,
-        password: passwordInput,
-      });
+      const { data: admin, error } = await supabase
+        .from('admin')
+        .select('id, email, password')
+        .ilike('email', email)
+        .maybeSingle();
 
-      if (error) {
+      if (error || !admin || admin.password !== passwordInput) {
         setPasswordError('Incorrect password');
         return;
       }
 
-      // Password correct - show values
-      setValuesHidden(false);
-      setShowPasswordModal(false);
-      setPasswordInput('');
-      setPasswordError('');
-    } catch (err) {
+      revealValues();
+    } catch {
       setPasswordError('Verification failed');
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const handlePinSubmit = async (pinValue?: string) => {
+    const value = (pinValue ?? pinInput).replace(/\D/g, '');
+    const email = getSessionEmail();
+    if (!email) {
+      setPasswordError('Unable to verify user');
+      return;
+    }
+    const len = getStoredPinLength(email);
+    if (value.length < len) return;
+
+    setIsVerifying(true);
+    setPasswordError('');
+    try {
+      const res = await authenticateWithPin(email, value);
+      if (!res.ok) {
+        setPasswordError('PIN incorrect');
+        setPinInput('');
+        return;
+      }
+      revealValues();
+    } catch {
+      setPasswordError('Verification failed');
+      setPinInput('');
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const onPinModalChange = (raw: string) => {
+    const email = getSessionEmail();
+    const len = email ? getStoredPinLength(email) : 4;
+    const digits = raw.replace(/\D/g, '').slice(0, len);
+    setPinInput(digits);
+    setPasswordError('');
+    if (digits.length === len) {
+      void handlePinSubmit(digits);
     }
   };
 
@@ -212,17 +274,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
     
     try {
       const email = await authenticateBiometric();
+      const sessionEmail = getSessionEmail();
       
-      if (email) {
-        // Biometric verified - show values
-        setValuesHidden(false);
-        setShowPasswordModal(false);
-        setPasswordInput('');
-        setPasswordError('');
+      if (email && (!sessionEmail || email.toLowerCase() === sessionEmail.toLowerCase())) {
+        revealValues();
       } else {
         setPasswordError('Fingerprint verification failed');
       }
-    } catch (err) {
+    } catch {
       setPasswordError('Fingerprint verification failed');
     } finally {
       setIsBiometricLoading(false);
@@ -286,23 +345,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
     },
   ];
 
-  // Slideshow data for Pending Payments/Total Upcoming card
-  const pendingCardSlides = [
-    {
-      title: 'Total Pending Payments',
-      value: `LKR ${totalPendingPayments.toLocaleString()}`,
-      hiddenValue: 'LKR •••••••',
-      icon: AlertCircle,
-      bgColor: 'bg-purple-500/10',
-    },
-    {
-      title: 'Total Upcoming',
-      value: `LKR ${totalUpcoming.toLocaleString()}`,
-      hiddenValue: 'LKR •••••••',
-      icon: TrendingUp,
-      bgColor: 'bg-orange-500/10',
-    },
-  ];
+  // Pending payments card — always show pending / total (no text labels)
+  const pendingPaymentsValue = (
+    <span className="inline-flex items-baseline gap-1 flex-wrap">
+      <span className="text-yellow-400">LKR {totalPendingPayments.toLocaleString()}</span>
+      <span className="text-[#F6E9E9]/40 font-normal">/</span>
+      <span>LKR {totalOutstanding.toLocaleString()}</span>
+    </span>
+  );
 
   const allRecentProjects = projects.slice(0, 3);
 
@@ -341,74 +391,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
             </button>
           </div>
           <div className="flex flex-row gap-2 w-full sm:w-auto sm:ml-auto">
-            {/* Month Dropdown */}
-            <div className="relative w-1/2 sm:w-auto">
-              <button
-                onClick={() => setMonthDropdownOpen(!monthDropdownOpen)}
-                className="w-full pl-3 pr-9 py-2 bg-[#272121]/70 border border-[#E16428]/50 rounded-lg text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200 hover:border-[#E16428] focus:ring-2 focus:ring-[#E16428]/40 sm:text-sm text-xs shadow-sm hover:shadow-md focus:shadow-lg flex items-center justify-between gap-2"
-              >
-                <div className="flex items-center gap-2">
-                  <Calendar className="w-4 h-4 text-[#E16428]" />
-                  <span className="sm:hidden">{new Date(0, selectedMonth).toLocaleString('default', { month: 'short' })}</span>
-                  <span className="hidden sm:inline">{new Date(0, selectedMonth).toLocaleString('default', { month: 'long' })}</span>
-                </div>
-                <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${monthDropdownOpen ? 'rotate-180' : ''}`} />
-              </button>
-              {monthDropdownOpen && (
-                <>
-                  <div className="fixed inset-0 z-10" onClick={() => setMonthDropdownOpen(false)} />
-                  <div className="absolute z-20 mt-1 w-full bg-[#272121] border border-[#E16428]/30 rounded-lg shadow-lg overflow-hidden">
-                    {Array.from({ length: 12 }).map((_, i) => (
-                      <button
-                        key={i}
-                        onClick={() => {
-                          setSelectedMonth(i);
-                          setMonthDropdownOpen(false);
-                        }}
-                        className="w-full px-4 py-2 text-left flex items-center gap-2 text-[#F6E9E9] hover:bg-[#E16428]/20 transition-colors"
-                      >
-                        <CalendarDays className="w-4 h-4" />
-                        <span>{new Date(0, i).toLocaleString('default', { month: 'long' })}</span>
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-            
-            {/* Year Dropdown */}
-            <div className="relative w-1/2 sm:w-auto">
-              <button
-                onClick={() => setYearDropdownOpen(!yearDropdownOpen)}
-                className="w-full pl-3 pr-9 py-2 bg-[#272121]/70 border border-[#E16428]/50 rounded-lg text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200 hover:border-[#E16428] focus:ring-2 focus:ring-[#E16428]/40 sm:text-sm text-xs shadow-sm hover:shadow-md focus:shadow-lg flex items-center justify-between gap-2"
-              >
-                <div className="flex items-center gap-2">
-                  <Clock className="w-4 h-4 text-[#E16428]" />
-                  <span>{selectedYear}</span>
-                </div>
-                <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${yearDropdownOpen ? 'rotate-180' : ''}`} />
-              </button>
-              {yearDropdownOpen && (
-                <>
-                  <div className="fixed inset-0 z-10" onClick={() => setYearDropdownOpen(false)} />
-                  <div className="absolute z-20 mt-1 w-full bg-[#272121] border border-[#E16428]/30 rounded-lg shadow-lg overflow-hidden max-h-60 overflow-y-auto">
-                    {years.map(year => (
-                      <button
-                        key={year}
-                        onClick={() => {
-                          setSelectedYear(year);
-                          setYearDropdownOpen(false);
-                        }}
-                        className="w-full px-4 py-2 text-left flex items-center gap-2 text-[#F6E9E9] hover:bg-[#E16428]/20 transition-colors"
-                      >
-                        <Clock className="w-4 h-4" />
-                        <span>{year}</span>
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
+            <MonthYearNavigator
+              selectedMonth={selectedMonth}
+              selectedYear={selectedYear}
+              availableYears={availableYears}
+              onChange={(month, year) => {
+                setSelectedMonth(month);
+                setSelectedYear(year);
+              }}
+            />
           </div>
         </div>
       </div>
@@ -469,37 +460,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
           </div>
         </GlassCard>
         
-        {/* Slideshow Card for Pending Payments / Total Upcoming */}
-        <GlassCard 
-          className="p-4 sm:p-6 hover:scale-105 transition-transform duration-300 cursor-pointer relative overflow-hidden"
-          onClick={() => setPendingCardSlide(prev => (prev === 0 ? 1 : 0))}
-        >
-          <div className="relative h-full">
-            {pendingCardSlides.map((slide, idx) => {
-              const SlideIcon = slide.icon;
-              return (
-                <div
-                  key={idx}
-                  className={`flex items-center justify-between transition-all duration-500 ease-in-out ${
-                    pendingCardSlide === idx 
-                      ? 'opacity-100 translate-y-0' 
-                      : 'opacity-0 absolute inset-0 translate-y-4'
-                  }`}
-                >
-                  <div>
-                    <p className="text-[#F6E9E9]/70 text-sm font-['Inter']">{slide.title}</p>
-                    <p className={`text-xl sm:text-2xl font-bold text-[#F6E9E9] mt-1 font-['Poppins'] transition-all duration-300 ${
-                      valuesHidden ? 'blur-sm select-none' : ''
-                    }`}>
-                      {valuesHidden ? slide.hiddenValue : slide.value}
-                    </p>
-                  </div>
-                  <div className={`p-3 rounded-full ${slide.bgColor} flex items-center justify-center`}>
-                    <SlideIcon className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
-                  </div>
-                </div>
-              );
-            })}
+        {/* Pending / Total outstanding — always visible, no slideshow */}
+        <GlassCard className="p-4 sm:p-6 hover:scale-105 transition-transform duration-300">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[#F6E9E9]/70 text-sm font-['Inter']">Total Pending Payments</p>
+              <p className={`text-xl sm:text-2xl font-bold text-[#F6E9E9] mt-1 font-['Poppins'] transition-all duration-300 ${
+                valuesHidden ? 'blur-sm select-none' : ''
+              }`}>
+                {valuesHidden ? 'LKR ••••• / •••••' : pendingPaymentsValue}
+              </p>
+            </div>
+            <div className="p-3 rounded-full bg-purple-500/10 flex items-center justify-center">
+              <AlertCircle className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+            </div>
           </div>
         </GlassCard>
       </div>
@@ -619,23 +593,44 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
         </div>
       </GlassCard>
 
-      {/* Password Verification Modal - Using Portal to render at body level */}
+      {/* Password / PIN Verification Modal */}
       {showPasswordModal && ReactDOM.createPortal(
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fadeIn">
-          <div className="bg-[#1a1a1a] border border-[#E16428]/30 rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-scaleIn">
-            <div className="flex items-center justify-between mb-6">
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fadeIn"
+          onClick={() => {
+            setShowPasswordModal(false);
+            setPasswordInput('');
+            setPinInput('');
+            setPasswordError('');
+          }}
+        >
+          <div
+            className="w-full max-w-sm p-6 animate-scaleIn"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-5">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-[#E16428]/20 rounded-full">
-                  <Lock className="w-5 h-5 text-[#E16428]" />
+                <div className="flex h-10 w-10 items-center justify-center rounded-full border border-[#E16428]/30 bg-[#E16428]/12">
+                  {pinEnabled ? (
+                    <KeyRound className="w-4 h-4 text-[#E16428]" />
+                  ) : (
+                    <Lock className="w-4 h-4 text-[#E16428]" />
+                  )}
                 </div>
                 <h3 className="text-lg font-semibold text-[#F6E9E9] font-['Poppins']">
-                  {isMobile && biometricSupported && hasBiometric ? 'Verify Identity' : 'Verify Password'}
+                  {pinEnabled
+                    ? 'Verify PIN'
+                    : isMobile && biometricSupported && hasBiometric
+                      ? 'Verify Identity'
+                      : 'Verify Password'}
                 </h3>
               </div>
               <button
+                type="button"
                 onClick={() => {
                   setShowPasswordModal(false);
                   setPasswordInput('');
+                  setPinInput('');
                   setPasswordError('');
                 }}
                 className="p-1 text-[#F6E9E9]/60 hover:text-[#F6E9E9] transition-colors"
@@ -643,86 +638,103 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
                 <X className="w-5 h-5" />
               </button>
             </div>
-            
-            {/* Fingerprint option for mobile with biometric */}
-            {isMobile && biometricSupported && hasBiometric && (
-              <div className="mb-6">
-                <button
-                  onClick={handleBiometricAuth}
-                  disabled={isBiometricLoading}
-                  className="w-full py-4 bg-gradient-to-r from-[#E16428]/20 to-[#E16428]/10 border border-[#E16428]/30 rounded-xl hover:border-[#E16428]/50 transition-all duration-300 flex flex-col items-center justify-center gap-2 group"
-                >
-                  <div className={`relative p-4 bg-[#E16428]/20 rounded-full group-hover:bg-[#E16428]/30 transition-colors overflow-hidden ${isBiometricLoading ? 'fingerprint-scanning' : ''}`}>
-                    <Fingerprint className={`w-10 h-10 text-[#E16428] ${isBiometricLoading ? 'fingerprint-icon' : ''}`} />
-                    {isBiometricLoading && (
-                      <div className="fingerprint-scan-line" />
+            <p className="text-[#F6E9E9]/70 text-sm mb-4 font-['Inter']">
+              {pinEnabled
+                ? 'Enter your OGO PIN to view sensitive information.'
+                : 'Enter your password to view sensitive information.'}
+            </p>
+
+            <div className="space-y-4">
+              {pinEnabled ? (
+                <div>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    maxLength={getSessionEmail() ? getStoredPinLength(getSessionEmail()!) : 4}
+                    value={pinInput}
+                    onChange={(e) => onPinModalChange(e.target.value)}
+                    placeholder="OGO PIN"
+                    disabled={isVerifying}
+                    className="underline-field w-full px-1 py-3 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] placeholder-[#F6E9E9]/40 focus:outline-none focus:border-[#E16428] focus:ring-0 focus:shadow-none transition-all duration-300 font-['Inter'] tracking-[0.35em] text-center text-lg"
+                    autoFocus
+                  />
+                  {passwordError && (
+                    <p className="mt-2 text-red-400 text-sm font-['Inter'] text-center">{passwordError}</p>
+                  )}
+                  {isMobile && biometricSupported && hasBiometric && (
+                    <div className="flex justify-center mt-4">
+                      <button
+                        type="button"
+                        onClick={() => void handleBiometricAuth()}
+                        disabled={isBiometricLoading || isVerifying}
+                        className={`relative h-12 w-12 flex items-center justify-center rounded-none border-0 bg-transparent text-[#E16428] hover:text-[#f07a42] disabled:opacity-50 focus:outline-none ${isBiometricLoading ? 'fingerprint-scanning' : ''}`}
+                        aria-label="Use fingerprint"
+                      >
+                        <Fingerprint className={`w-8 h-8 ${isBiometricLoading ? 'fingerprint-icon' : ''}`} strokeWidth={1.75} />
+                        {isBiometricLoading && <div className="fingerprint-scan-line" />}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <input
+                      type="password"
+                      value={passwordInput}
+                      onChange={(e) => {
+                        setPasswordInput(e.target.value);
+                        setPasswordError('');
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          void handlePasswordSubmit();
+                        }
+                      }}
+                      placeholder="Enter your password"
+                      className="underline-field w-full px-1 py-3 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] placeholder-[#F6E9E9]/40 focus:outline-none focus:border-[#E16428] focus:ring-0 focus:shadow-none transition-all duration-300 font-['Inter']"
+                      autoFocus
+                    />
+                    {passwordError && (
+                      <p className="mt-2 text-red-400 text-sm font-['Inter']">{passwordError}</p>
                     )}
                   </div>
-                  <span className="text-[#F6E9E9] font-medium font-['Inter']">
-                    {isBiometricLoading ? 'Scanning...' : 'Use Fingerprint'}
-                  </span>
-                  <span className="text-[#F6E9E9]/50 text-xs font-['Inter']">
-                    {isBiometricLoading ? 'Please wait' : 'Touch the sensor to unlock'}
-                  </span>
-                </button>
-                
-                <div className="flex items-center gap-3 my-4">
-                  <div className="flex-1 h-px bg-[#E16428]/20"></div>
-                  <span className="text-[#F6E9E9]/50 text-xs font-['Inter']">or use password</span>
-                  <div className="flex-1 h-px bg-[#E16428]/20"></div>
-                </div>
-              </div>
-            )}
-            
-            {/* Only show this label when biometric is NOT available */}
-            {!(isMobile && biometricSupported && hasBiometric) && (
-              <p className="text-[#F6E9E9]/70 text-sm mb-4 font-['Inter']">
-                Enter your password to view sensitive information.
-              </p>
-            )}
-            
-            <div className="space-y-4">
-              <div>
-                <input
-                  type="password"
-                  value={passwordInput}
-                  onChange={(e) => {
-                    setPasswordInput(e.target.value);
-                    setPasswordError('');
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      handlePasswordSubmit();
-                    }
-                  }}
-                  placeholder="Enter your password"
-                  className="w-full px-4 py-3 bg-[#272121]/70 border border-[#E16428]/30 rounded-lg text-[#F6E9E9] placeholder-[#F6E9E9]/40 focus:outline-none focus:border-[#E16428] transition-all duration-300 font-['Inter']"
-                  autoFocus={!(isMobile && biometricSupported && hasBiometric)}
-                />
-                {passwordError && (
-                  <p className="mt-2 text-red-400 text-sm font-['Inter']">{passwordError}</p>
-                )}
-              </div>
-              
-              <div className="flex gap-3">
-                <button
-                  onClick={() => {
-                    setShowPasswordModal(false);
-                    setPasswordInput('');
-                    setPasswordError('');
-                  }}
-                  className="flex-1 px-4 py-2.5 bg-[#272121]/50 text-[#F6E9E9]/70 rounded-lg hover:bg-[#272121] transition-colors font-['Inter'] text-sm"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handlePasswordSubmit}
-                  className="flex-1 px-4 py-2.5 bg-[#E16428] text-white rounded-lg hover:bg-[#E16428]/80 transition-colors font-['Inter'] text-sm font-medium flex items-center justify-center gap-2"
-                >
-                  <Eye className="w-4 h-4" />
-                  Reveal
-                </button>
-              </div>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowPasswordModal(false);
+                        setPasswordInput('');
+                        setPasswordError('');
+                      }}
+                      className="flex-1 px-4 py-2.5 bg-transparent border border-[#E16428]/25 text-[#F6E9E9]/80 rounded-lg hover:border-[#E16428]/45 hover:bg-[#E16428]/8 transition-all duration-200 font-['Inter'] text-sm"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handlePasswordSubmit()}
+                      disabled={isVerifying}
+                      className="flex-1 px-4 py-2.5 bg-[#E16428] text-white rounded-lg hover:bg-[#d4551f] transition-colors font-['Inter'] text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      <Eye className="w-4 h-4" />
+                      {isVerifying ? '…' : 'Reveal'}
+                    </button>
+                    {isMobile && biometricSupported && hasBiometric && (
+                      <button
+                        type="button"
+                        onClick={() => void handleBiometricAuth()}
+                        disabled={isBiometricLoading}
+                        className={`relative h-12 w-12 shrink-0 flex items-center justify-center rounded-none border-0 bg-transparent text-[#E16428] hover:text-[#f07a42] disabled:opacity-50 focus:outline-none ${isBiometricLoading ? 'fingerprint-scanning' : ''}`}
+                        aria-label="Use fingerprint"
+                      >
+                        <Fingerprint className={`w-8 h-8 ${isBiometricLoading ? 'fingerprint-icon' : ''}`} strokeWidth={1.75} />
+                        {isBiometricLoading && <div className="fingerprint-scan-line" />}
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>,

@@ -9,7 +9,7 @@ export const useEmployees = () => {
 
   // Map database row to Employee object
   const mapEmployeeFromDB = (employee: any): Employee => ({
-    id: employee.id,
+    id: String(employee.id),
     employeeId: employee.employee_id,
     birthday: employee.birthday,
     firstName: employee.first_name,
@@ -19,6 +19,7 @@ export const useEmployees = () => {
     whatsappNumber: employee.whatsapp,
     emailAddress: employee.email,
     qualifications: employee.qualifications,
+    isActive: employee.is_active ?? true,
     createdAt: employee.created_at,
   });
 
@@ -33,6 +34,7 @@ export const useEmployees = () => {
     whatsapp: employee.whatsappNumber,
     email: employee.emailAddress,
     qualifications: employee.qualifications,
+    is_active: employee.isActive !== false,
   });
 
   // Fetch all employees from database
@@ -106,6 +108,7 @@ export const useEmployees = () => {
       if (updates.whatsappNumber !== undefined) updateData.whatsapp = updates.whatsappNumber;
       if (updates.emailAddress !== undefined) updateData.email = updates.emailAddress;
       if (updates.qualifications !== undefined) updateData.qualifications = updates.qualifications;
+      if (updates.isActive !== undefined) updateData.is_active = updates.isActive;
 
       const { data, error: updateError } = await supabase
         .from('employees')

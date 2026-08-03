@@ -1,9 +1,22 @@
 import React, { useRef, useEffect } from 'react';
-import { X } from 'lucide-react';
+import ReactDOM from 'react-dom';
+import { KeyRound, Lock, X } from 'lucide-react';
 import jsPDF from 'jspdf';
 import { Chart, ArcElement, BarElement, CategoryScale, LinearScale, Tooltip, Legend, PieController, LineElement, PointElement, LineController, Filler } from 'chart.js';
 import { Project, Employee } from '../types';
 import { supabase } from '../supabaseClient';
+import {
+  getEmployeeProjectPaymentBreakdown,
+  getProjectEmployeePaymentsDue,
+  getProjectEmployeePaymentsPaid,
+  getProjectEmployeePaymentsPending,
+} from '../utils/employeePayments';
+import {
+  authenticateWithPin,
+  getLastLoginEmail,
+  getStoredPinLength,
+  loadAdminSecurity,
+} from '../utils/adminSecurity';
 
 Chart.register(ArcElement, BarElement, CategoryScale, LinearScale, Tooltip, Legend, PieController, LineElement, PointElement, LineController, Filler);
 
@@ -64,13 +77,35 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
   const [adminPassword, setAdminPassword] = React.useState('');
   const [authError, setAuthError] = React.useState('');
   const [isAuthenticating, setIsAuthenticating] = React.useState(false);
+  const [pinEnabled, setPinEnabled] = React.useState(false);
+  const [pinInput, setPinInput] = React.useState('');
+
+  const getSessionEmail = (): string | null => {
+    try {
+      const raw = localStorage.getItem('ogo_session');
+      if (raw) {
+        const s = JSON.parse(raw);
+        if (typeof s?.email === 'string') return s.email;
+      }
+    } catch {
+      /* ignore */
+    }
+    return getLastLoginEmail();
+  };
+
+  const closeAuthModal = () => {
+    setShowAuthModal(false);
+    setAdminPassword('');
+    setPinInput('');
+    setAuthError('');
+  };
 
   // ESC key handler to close modals
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         if (showAuthModal) {
-          setShowAuthModal(false);
+          closeAuthModal();
         } else if (open) {
           onClose();
         }
@@ -81,9 +116,11 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showAuthModal, open, onClose]);
 
-  // Enhanced analytics calculations
+  // Enhanced analytics calculations (due = cost; paid/pending for payment status)
   const totalRevenue = projects.reduce((sum, p) => sum + p.price, 0);
-  const totalEmployeePayments = projects.reduce((sum, p) => sum + p.paymentOfEmp, 0);
+  const totalEmployeePayments = projects.reduce((sum, p) => sum + getProjectEmployeePaymentsDue(p), 0);
+  const totalPaidEmployeePayments = projects.reduce((sum, p) => sum + getProjectEmployeePaymentsPaid(p), 0);
+  const totalPendingEmployeePayments = projects.reduce((sum, p) => sum + getProjectEmployeePaymentsPending(p), 0);
   const profit = totalRevenue - totalEmployeePayments;
   const profitMargin = totalRevenue > 0 ? (profit / totalRevenue) * 100 : 0;
   const totalProjects = projects.length;
@@ -112,10 +149,11 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
         };
       }
       
+      const empDue = getProjectEmployeePaymentsDue(project);
       months[monthKey].revenue += project.price;
       months[monthKey].projects += 1;
-      months[monthKey].employeePayments += project.paymentOfEmp;
-      months[monthKey].profit += (project.price - project.paymentOfEmp);
+      months[monthKey].employeePayments += empDue;
+      months[monthKey].profit += (project.price - empDue);
       
       if (project.status === 'Delivered') {
         months[monthKey].completed += 1;
@@ -136,16 +174,31 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
 
   // Enhanced employee performance analysis
   const employeeStats = employees.map(emp => {
-    const empProjects = projects.filter(p => p.assignedTo === emp.id);
-    const totalEarnings = empProjects.reduce((sum, p) => sum + p.paymentOfEmp, 0);
+    const empProjects = projects.filter(p => {
+      if (!p.assignedTo) return false;
+      return p.assignedTo.split(',').map(id => id.trim()).includes(emp.id);
+    });
+    let totalEarnings = 0;
+    let paidEarnings = 0;
+    let pendingEarnings = 0;
+    empProjects.forEach(p => {
+      const breakdown = getEmployeeProjectPaymentBreakdown(p, emp.id);
+      totalEarnings += breakdown.due;
+      paidEarnings += breakdown.paid;
+      pendingEarnings += breakdown.remaining;
+    });
     const revenue = empProjects.reduce((sum, p) => sum + p.price, 0);
+    const profit = empProjects.reduce((sum, p) => sum + (p.price - getProjectEmployeePaymentsDue(p)), 0);
     const completed = empProjects.filter(p => p.status === 'Delivered').length;
     const isRanukaJayesh = `${emp.firstName} ${emp.lastName}`.toLowerCase() === 'ranuka jayesh';
     return {
       ...emp,
       totalEarnings,
+      paidEarnings,
+      pendingEarnings,
       revenue,
-      displayValue: isRanukaJayesh ? revenue : totalEarnings,
+      profit,
+      displayValue: isRanukaJayesh ? profit : totalEarnings,
       projectCount: empProjects.length,
       completedProjects: completed,
       completionRate: empProjects.length > 0 ? (completed / empProjects.length) * 100 : 0,
@@ -396,11 +449,59 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
     const isAuthenticated = await authenticateAdmin(adminPassword);
     
     if (isAuthenticated) {
-      setShowAuthModal(false);
-      setAdminPassword('');
-      setAuthError('');
+      closeAuthModal();
       // Proceed with export
       handleExport();
+    }
+  };
+
+  const handlePinAuth = async (pinValue?: string) => {
+    const value = (pinValue ?? pinInput).replace(/\D/g, '');
+    const email = getSessionEmail();
+    if (!email) {
+      setAuthError('Unable to verify user');
+      return;
+    }
+    const len = getStoredPinLength(email);
+    if (value.length < len) return;
+
+    setIsAuthenticating(true);
+    setAuthError('');
+    try {
+      const res = await authenticateWithPin(email, value);
+      if (!res.ok) {
+        await logAction(null, email, 'export_auth_fail');
+        setAuthError('PIN incorrect');
+        setPinInput('');
+        return;
+      }
+      const { data: admin } = await supabase
+        .from('admin')
+        .select('id, email')
+        .ilike('email', email)
+        .maybeSingle();
+      if (admin) {
+        await logAction(admin.id, admin.email, 'export_auth_success');
+      }
+      closeAuthModal();
+      handleExport();
+    } catch {
+      await logAction(null, 'Unknown', 'export_auth_error');
+      setAuthError('Authentication failed. Please try again.');
+      setPinInput('');
+    } finally {
+      setIsAuthenticating(false);
+    }
+  };
+
+  const onPinChange = (raw: string) => {
+    const email = getSessionEmail();
+    const len = email ? getStoredPinLength(email) : 4;
+    const digits = raw.replace(/\D/g, '').slice(0, len);
+    setPinInput(digits);
+    setAuthError('');
+    if (digits.length === len) {
+      void handlePinAuth(digits);
     }
   };
 
@@ -902,9 +1003,10 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
     const insights = [
       `• Total Revenue: LKR ${totalRevenue.toLocaleString()} with ${profitMargin.toFixed(1)}% profit margin`,
       `• Project Completion Rate: ${completionRate.toFixed(1)}% (${completedProjects}/${totalProjects} projects)`,
-      `• Best Performing Employee: ${bestEmployee ? `${bestEmployee.firstName} ${bestEmployee.lastName}` : 'N/A'} with LKR ${bestEmployee ? bestEmployee.displayValue.toLocaleString() : '0'} revenue`,
+      `• Best Performing Employee: ${bestEmployee ? `${bestEmployee.firstName} ${bestEmployee.lastName}` : 'N/A'} with LKR ${bestEmployee ? bestEmployee.displayValue.toLocaleString() : '0'}`,
       `• Top Client: ${bestOrg ? bestOrg[0] : 'N/A'} with ${bestOrg ? bestOrg[1].count : 0} projects`,
       `• Average Project Value: LKR ${averageProjectValue.toLocaleString()}`,
+      `• Employee Payments Due: LKR ${totalEmployeePayments.toLocaleString()} (Paid ${totalPaidEmployeePayments.toLocaleString()} · Pending ${totalPendingEmployeePayments.toLocaleString()})`,
       `• Employee Payment Ratio: ${totalRevenue > 0 ? ((totalEmployeePayments / totalRevenue) * 100).toFixed(1) : '0'}% of revenue`,
       `• Revenue Trend: ${revenueTrend.length > 1 ? (revenueTrend[revenueTrend.length - 1].revenue > revenueTrend[revenueTrend.length - 2].revenue ? 'Increasing' : 'Decreasing') : 'Stable'} over the last ${revenueTrend.length} months`,
       `• Monthly Average Revenue: LKR ${revenueTrend.length > 0 ? (revenueTrend.reduce((sum, r) => sum + r.revenue, 0) / revenueTrend.length).toLocaleString() : '0'}`
@@ -957,10 +1059,18 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
   };
 
   // Handle export button click (triggers authentication)
-  const handleExportClick = () => {
+  const handleExportClick = async () => {
     setShowAuthModal(true);
     setAdminPassword('');
+    setPinInput('');
     setAuthError('');
+    const email = getSessionEmail();
+    if (email) {
+      const prefs = await loadAdminSecurity(email);
+      setPinEnabled(prefs.pinEnabled);
+    } else {
+      setPinEnabled(false);
+    }
   };
 
   useEffect(() => {
@@ -1033,8 +1143,8 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
         }
 
         yearlyData[projectYear].revenue += project.price;
-        yearlyData[projectYear].employeePayments += project.paymentOfEmp;
-        yearlyData[projectYear].profit += (project.price - project.paymentOfEmp);
+        yearlyData[projectYear].employeePayments += getProjectEmployeePaymentsDue(project);
+        yearlyData[projectYear].profit += (project.price - getProjectEmployeePaymentsDue(project));
         yearlyData[projectYear].projectCount += 1;
         const clientKey = `${project.clientName}|${project.clientUniOrg}`;
         yearlyData[projectYear].uniqueClients.add(clientKey);
@@ -1299,7 +1409,9 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
           <div className="bg-gradient-to-r from-yellow-500/80 to-yellow-500/40 rounded-xl p-4 flex flex-col gap-2 shadow">
             <span className="text-[#fff]/80 text-sm font-['Inter']">Employee Payments</span>
             <span className="text-xl font-bold text-white font-['Poppins']">LKR {totalEmployeePayments.toLocaleString()}</span>
-            <span className="text-[#fff]/60 text-xs">Best: {bestEmployee ? `${bestEmployee.firstName} ${bestEmployee.lastName}` : 'N/A'}</span>
+            <span className="text-[#fff]/60 text-xs">
+              Paid {totalPaidEmployeePayments.toLocaleString()} · Pending {totalPendingEmployeePayments.toLocaleString()}
+            </span>
           </div>
         </div>
         
@@ -1381,68 +1493,98 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
       </div>
 
       {/* Authentication Modal */}
-      {showAuthModal && (
-        <div className="fixed inset-0 z-[999] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn p-4">
-          <div className="bg-[#272121] border border-[#E16428]/30 rounded-2xl shadow-2xl p-6 sm:p-8 max-w-md w-full scale-100 animate-popIn">
-            <div className="flex items-center justify-between mb-6">
+      {showAuthModal && ReactDOM.createPortal(
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fadeIn"
+          onClick={closeAuthModal}
+        >
+          <div
+            className="w-full max-w-sm p-6 animate-scaleIn"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-5">
               <div className="flex items-center gap-3">
-                <div className="p-2 bg-[#E16428]/20 rounded-full">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-[#E16428]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                  </svg>
+                <div className="flex h-10 w-10 items-center justify-center rounded-full border border-[#E16428]/30 bg-[#E16428]/12">
+                  {pinEnabled ? (
+                    <KeyRound className="w-4 h-4 text-[#E16428]" />
+                  ) : (
+                    <Lock className="w-4 h-4 text-[#E16428]" />
+                  )}
                 </div>
-                <h3 className="text-xl font-bold text-[#F6E9E9] font-['Poppins']">
-                  Admin Authentication
+                <h3 className="text-lg font-semibold text-[#F6E9E9] font-['Poppins']">
+                  {pinEnabled ? 'Verify PIN' : 'Admin Authentication'}
                 </h3>
               </div>
               <button
-                onClick={() => setShowAuthModal(false)}
-                className="p-2 hover:bg-[#363333]/60 rounded-full transition-colors"
+                type="button"
+                onClick={closeAuthModal}
+                className="p-1 text-[#F6E9E9]/60 hover:text-[#F6E9E9] transition-colors"
               >
-                <X className="w-5 h-5 text-[#F6E9E9]/70" />
+                <X className="w-5 h-5" />
               </button>
             </div>
-            
-            <form onSubmit={handleAuthSubmit} className="space-y-4">
-              <div>
-                <label className="block text-[#F6E9E9] text-sm font-medium mb-2 font-['Inter']">
-                  Admin Password
-                </label>
+            <p className="text-[#F6E9E9]/70 text-sm mb-4 font-['Inter']">
+              {pinEnabled
+                ? 'Enter your OGO PIN to export the report.'
+                : 'Enter admin password to export the report.'}
+            </p>
+
+            {pinEnabled ? (
+              <div className="space-y-4">
                 <input
                   type="password"
-                  value={adminPassword}
-                  onChange={(e) => setAdminPassword(e.target.value)}
-                  className="w-full px-4 py-3 bg-[#363333]/60 border border-[#E16428]/30 rounded-lg text-[#F6E9E9] focus:outline-none focus:border-[#E16428] font-['Inter'] transition-all duration-200"
-                  placeholder="Enter admin password"
-                  autoFocus
-                />
-              </div>
-              
-              {authError && (
-                <div className="p-3 bg-red-500/20 border border-red-500/30 rounded-lg">
-                  <p className="text-red-400 text-sm font-['Inter']">{authError}</p>
-                </div>
-              )}
-              
-              <div className="flex gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowAuthModal(false)}
-                  className="flex-1 px-4 py-3 bg-[#363333]/60 text-[#F6E9E9] rounded-lg hover:bg-[#E16428]/10 transition-all duration-200 font-['Poppins'] font-medium"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
+                  inputMode="numeric"
+                  maxLength={getSessionEmail() ? getStoredPinLength(getSessionEmail()!) : 4}
+                  value={pinInput}
+                  onChange={(e) => onPinChange(e.target.value)}
                   disabled={isAuthenticating}
-                  className="flex-1 px-4 py-3 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white rounded-lg shadow-lg hover:scale-105 transition-all duration-200 font-['Poppins'] font-bold disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
-                >
-                  {isAuthenticating ? 'Authenticating...' : 'Export Report'}
-                </button>
+                  placeholder="OGO PIN"
+                  autoFocus
+                  className="underline-field w-full px-1 py-3 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] placeholder-[#F6E9E9]/40 focus:outline-none focus:border-[#E16428] focus:ring-0 focus:shadow-none transition-all duration-300 font-['Inter'] tracking-[0.35em] text-center text-lg"
+                />
+                {authError && (
+                  <p className="text-red-400 text-sm text-center font-['Inter']">{authError}</p>
+                )}
               </div>
-            </form>
+            ) : (
+              <form onSubmit={handleAuthSubmit} className="space-y-4">
+                <div>
+                  <input
+                    type="password"
+                    value={adminPassword}
+                    onChange={(e) => {
+                      setAdminPassword(e.target.value);
+                      setAuthError('');
+                    }}
+                    className="underline-field w-full px-1 py-3 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] placeholder-[#F6E9E9]/40 focus:outline-none focus:border-[#E16428] focus:ring-0 focus:shadow-none transition-all duration-300 font-['Inter']"
+                    placeholder="Enter admin password"
+                    autoFocus
+                  />
+                  {authError && (
+                    <p className="mt-2 text-red-400 text-sm font-['Inter']">{authError}</p>
+                  )}
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={closeAuthModal}
+                    className="flex-1 px-4 py-2.5 bg-transparent border border-[#E16428]/25 text-[#F6E9E9]/80 rounded-lg hover:border-[#E16428]/45 hover:bg-[#E16428]/8 transition-all duration-200 font-['Inter'] text-sm"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isAuthenticating}
+                    className="flex-1 px-4 py-2.5 bg-[#E16428] text-white rounded-lg hover:bg-[#d4551f] transition-colors font-['Inter'] text-sm font-semibold disabled:opacity-50"
+                  >
+                    {isAuthenticating ? '…' : 'Export Report'}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

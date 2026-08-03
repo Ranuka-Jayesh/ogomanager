@@ -48,6 +48,54 @@ body {
   animation: slideSwap 0.4s ease-out forwards;
 }
 
+@keyframes loginModeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.login-mode-panel {
+  animation: loginModeIn 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.login-mode-subtitle {
+  animation: loginModeIn 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes pinDotsShake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  15% {
+    transform: translateX(-10px);
+  }
+  30% {
+    transform: translateX(10px);
+  }
+  45% {
+    transform: translateX(-8px);
+  }
+  60% {
+    transform: translateX(8px);
+  }
+  75% {
+    transform: translateX(-4px);
+  }
+  90% {
+    transform: translateX(4px);
+  }
+}
+
+.pin-dots-shake {
+  animation: pinDotsShake 0.45s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
 @keyframes popIn {
   0% { transform: scale(0.8); opacity: 0; }
   100% { transform: scale(1); opacity: 1; }
@@ -102,6 +150,39 @@ select:focus {
   box-shadow: 0 0 0 3px rgba(225, 100, 40, 0.1);
 }
 
+/* Underline-only fields — no focus ring / bg / side borders */
+input.project-search-input,
+input.project-search-input:focus,
+input.project-search-input:focus-visible,
+input.underline-field,
+input.underline-field:focus,
+input.underline-field:focus-visible,
+textarea.underline-field,
+textarea.underline-field:focus,
+textarea.underline-field:focus-visible,
+button.underline-field,
+button.underline-field:focus,
+button.underline-field:focus-visible,
+div.underline-field,
+div.underline-field:focus-within {
+  outline: none !important;
+  box-shadow: none !important;
+  background-color: transparent !important;
+  border-top: none !important;
+  border-left: none !important;
+  border-right: none !important;
+  border-bottom-width: 1px !important;
+  border-bottom-style: solid !important;
+  border-bottom-color: rgba(225, 100, 40, 0.3) !important;
+}
+
+div.underline-field input:focus,
+div.underline-field input:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+  background-color: transparent !important;
+}
+
 /* Custom Button Styles */
 .btn-primary {
   background: linear-gradient(135deg, #E16428 0%, #E16428 100%);
@@ -139,6 +220,14 @@ select:focus {
   /* Improve touch targets on mobile */
   button {
     min-height: 44px;
+  }
+
+  /* Compact controls that use a larger hit target instead of tall chrome */
+  button.toggle-switch,
+  button.toggle-link {
+    min-height: 0;
+    height: auto;
+    padding: 0;
   }
   
   /* Better spacing on mobile */
@@ -208,6 +297,21 @@ input:focus-visible,
 textarea:focus-visible {
   outline: 2px solid #E16428;
   outline-offset: 2px;
+}
+
+/* PIN dialpad — no focus / active chrome on mobile taps */
+button.pin-key,
+button.pin-key:focus,
+button.pin-key:focus-visible,
+button.pin-key:active {
+  outline: none !important;
+  box-shadow: none !important;
+  border: none !important;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pin-dialpad {
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* Loading States */

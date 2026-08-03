@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
-import { Edit, Trash2, Plus, Save, X, Lock, Layers } from 'lucide-react';
+import { Edit, Trash2, Plus, Save, X, Lock, Layers, MessageSquareText, Mail, Shield } from 'lucide-react';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import {
   getLocalProjectTypes,
@@ -11,14 +11,49 @@ import {
   getSyncQueueCount,
 } from '../lib/offlineStore';
 import { syncManager } from '../lib/syncManager';
+import { ReceiptCaptionSettings } from './ReceiptCaptionSettings';
+import { SecuritySettings } from './SecuritySettings';
 
 const TABS = [
-  { id: 'project-types', label: 'Project Types', icon: Layers },
-  { id: 'admin-password', label: 'Admin Password', icon: Lock },
+  { id: 'project-types', label: 'Categories', icon: Layers },
+  { id: 'receipt-caption', label: 'Captions', icon: MessageSquareText },
+  { id: 'security', label: 'Security', icon: Shield },
+  { id: 'admin-account', label: 'Account', icon: Lock },
 ];
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function updateStoredSessionEmail(oldEmail: string, newEmail: string) {
+  try {
+    const sessionData = localStorage.getItem('ogo_session');
+    if (sessionData) {
+      const session = JSON.parse(sessionData);
+      if (session?.email === oldEmail || session?.email) {
+        session.email = newEmail;
+        localStorage.setItem('ogo_session', JSON.stringify(session));
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    const bio = localStorage.getItem('biometric_credential');
+    if (bio) {
+      const cred = JSON.parse(bio);
+      if (cred?.email === oldEmail) {
+        cred.email = newEmail;
+        localStorage.setItem('biometric_credential', JSON.stringify(cred));
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+}
 
 export const Settings: React.FC = () => {
   const [activeTab, setActiveTab] = useState('project-types');
+  const [adminSubTab, setAdminSubTab] = useState<'email' | 'password'>('email');
   const { isOnline } = useNetworkStatus();
 
   // Project Types State
@@ -37,10 +72,33 @@ export const Settings: React.FC = () => {
   const [passwordMsgType, setPasswordMsgType] = useState<'error' | 'success'>('error');
   const [isChangingPassword, setIsChangingPassword] = useState(false);
 
+  // Admin Email State
+  const [currentEmail, setCurrentEmail] = useState('');
+  const [newEmail, setNewEmail] = useState('');
+  const [confirmEmail, setConfirmEmail] = useState('');
+  const [emailPassword, setEmailPassword] = useState('');
+  const [emailMsg, setEmailMsg] = useState('');
+  const [emailMsgType, setEmailMsgType] = useState<'error' | 'success'>('error');
+  const [isChangingEmail, setIsChangingEmail] = useState(false);
+
   // Fetch project types
   useEffect(() => {
     if (activeTab === 'project-types') fetchTypes();
     // eslint-disable-next-line
+  }, [activeTab]);
+
+  // Load current admin email when opening account tab
+  useEffect(() => {
+    if (activeTab !== 'admin-account') return;
+    try {
+      const sessionData = localStorage.getItem('ogo_session');
+      if (sessionData) {
+        const session = JSON.parse(sessionData);
+        if (session?.email) setCurrentEmail(session.email);
+      }
+    } catch {
+      /* ignore */
+    }
   }, [activeTab]);
 
   // Subscribe to sync events to refresh data
@@ -286,6 +344,109 @@ export const Settings: React.FC = () => {
     }
   }
 
+  async function handleChangeEmail(e: React.FormEvent) {
+    e.preventDefault();
+    setIsChangingEmail(true);
+    setEmailMsg('');
+    setEmailMsgType('error');
+
+    try {
+      const nextEmail = newEmail.trim().toLowerCase();
+      const confirm = confirmEmail.trim().toLowerCase();
+
+      if (!nextEmail) {
+        setEmailMsg('Please enter a new email.');
+        setIsChangingEmail(false);
+        return;
+      }
+
+      if (!EMAIL_RE.test(nextEmail)) {
+        setEmailMsg('Please enter a valid email address.');
+        setIsChangingEmail(false);
+        return;
+      }
+
+      if (nextEmail !== confirm) {
+        setEmailMsg('Email addresses do not match.');
+        setIsChangingEmail(false);
+        return;
+      }
+
+      if (!emailPassword.trim()) {
+        setEmailMsg('Please enter your current password.');
+        setIsChangingEmail(false);
+        return;
+      }
+
+      if (currentEmail && nextEmail === currentEmail.toLowerCase()) {
+        setEmailMsg('New email must be different from the current email.');
+        setIsChangingEmail(false);
+        return;
+      }
+
+      // Verify current password + identity
+      let adminQuery = supabase
+        .from('admin')
+        .select('id, email, password')
+        .eq('password', emailPassword.trim());
+
+      if (currentEmail) {
+        adminQuery = adminQuery.eq('email', currentEmail);
+      }
+
+      const { data: admin, error: adminError } = await adminQuery.single();
+
+      if (adminError || !admin) {
+        await logAction(null, currentEmail || 'Unknown', 'email_change_fail');
+        setEmailMsg('Current password is incorrect.');
+        setIsChangingEmail(false);
+        return;
+      }
+
+      // Ensure email is not already used by another admin
+      const { data: existing } = await supabase
+        .from('admin')
+        .select('id')
+        .eq('email', nextEmail)
+        .maybeSingle();
+
+      if (existing && existing.id !== admin.id) {
+        setEmailMsg('That email is already in use.');
+        setIsChangingEmail(false);
+        return;
+      }
+
+      const { error: updateError } = await supabase
+        .from('admin')
+        .update({ email: nextEmail })
+        .eq('id', admin.id);
+
+      if (updateError) {
+        console.error('Error updating email:', updateError);
+        await logAction(admin.id, admin.email, 'email_change_error');
+        setEmailMsg('Failed to update email. Please try again.');
+        setIsChangingEmail(false);
+        return;
+      }
+
+      updateStoredSessionEmail(admin.email, nextEmail);
+      await logAction(admin.id, nextEmail, 'email_change_success');
+
+      setCurrentEmail(nextEmail);
+      setNewEmail('');
+      setConfirmEmail('');
+      setEmailPassword('');
+      setEmailMsgType('success');
+      setEmailMsg('Email updated successfully!');
+      setTimeout(() => setEmailMsg(''), 5000);
+    } catch (error) {
+      console.error('Unexpected error during email change:', error);
+      setEmailMsg('An unexpected error occurred. Please try again.');
+    } finally {
+      setIsChangingEmail(false);
+    }
+  }
+
   // ESC key handler to close delete modal
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -299,25 +460,32 @@ export const Settings: React.FC = () => {
   }, [showDeleteModal]);
 
   return (
-    <div className="max-w-2xl mx-auto py-4 sm:py-8 px-2 sm:px-4 animate-fadeIn">
-      {/* Tabs */}
-      <div className="flex border-b border-[#E16428]/30 mb-6 sm:mb-8">
+    <div className={`${activeTab === 'receipt-caption' ? 'max-w-5xl' : 'max-w-2xl'} mx-auto py-4 sm:py-8 px-2 sm:px-4 animate-fadeIn`}>
+      {/* Tabs — equal columns on mobile, no horizontal scroll overflow */}
+      <div
+        role="tablist"
+        className="grid grid-cols-2 sm:grid-cols-4 w-full border-b border-[#E16428]/30 mb-6 sm:mb-8"
+      >
         {TABS.map(tab => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
           return (
             <button
               key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center px-4 sm:px-6 py-2 sm:py-3 font-medium transition-all duration-200 border-b-2 text-sm sm:text-base ${
+              className={`flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 min-w-0 w-full px-1 sm:px-4 py-2.5 sm:py-3 font-medium transition-colors duration-200 border-b-2 -mb-px ${
                 isActive
-                  ? 'border-[#E16428] text-[#E16428] bg-[#272121]/40'
+                  ? 'border-[#E16428] text-[#E16428]'
                   : 'border-transparent text-[#F6E9E9]/70 hover:text-[#E16428]'
               }`}
-              style={{ outline: 'none' }}
             >
-              <Icon className="w-4 h-4 sm:w-5 sm:h-5 mr-2" />
-              {tab.label}
+              <Icon className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
+              <span className="text-[10px] leading-tight sm:text-base text-center break-words max-w-full">
+                {tab.label}
+              </span>
             </button>
           );
         })}
@@ -327,42 +495,102 @@ export const Settings: React.FC = () => {
       <div className="bg-[#272121]/60 rounded-xl shadow-lg p-4 sm:p-6">
         {activeTab === 'project-types' && (
           <section>
-            <h2 className="text-lg sm:text-xl font-bold text-[#F6E9E9] mb-4">Project Types</h2>
-            <div className="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2 mb-4">
+            <h2 className="text-lg sm:text-xl font-bold text-[#F6E9E9] mb-4 font-['Playfair_Display']">
+              Project Types
+            </h2>
+            <div className="flex flex-row items-end gap-2 sm:gap-3 mb-6">
               <input
                 value={newType}
                 onChange={e => setNewType(e.target.value)}
-                className="w-full px-3 py-2 rounded bg-[#272121]/50 border border-[#E16428]/20 text-[#F6E9E9] focus:outline-none text-sm"
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    addType();
+                  }
+                }}
+                className="underline-field flex-1 min-w-0 w-full px-0 py-2.5 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] focus:border-[#E16428] focus:outline-none text-sm font-['Inter'] placeholder-[#F6E9E9]/35 transition-[border-color]"
                 placeholder="Add new project type"
               />
               <button
                 onClick={addType}
-                className="bg-[#E16428] text-white px-4 py-2 rounded hover:bg-[#d35400] flex items-center justify-center sm:w-auto"
+                type="button"
+                className="inline-flex items-center justify-center gap-1.5 shrink-0 h-10 pb-0.5 sm:pb-2.5 px-1 text-sm text-[#E16428] hover:text-[#F6E9E9] transition-colors font-['Poppins'] font-medium"
               >
-                <Plus className="w-4 h-4 mr-1" /> Add
+                <Plus className="w-4 h-4" /> Add
               </button>
             </div>
             {loading ? (
-              <div className="text-[#F6E9E9]/70">Loading...</div>
+              <div className="text-[#F6E9E9]/50 text-sm font-['Inter'] py-3">Loading...</div>
+            ) : projectTypes.length === 0 ? (
+              <div className="text-[#F6E9E9]/40 text-sm font-['Inter'] py-3 border-b border-[#E16428]/15">
+                No project types yet
+              </div>
             ) : (
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-col max-h-[min(50vh,22rem)] overflow-y-auto overscroll-contain pr-1">
                 {projectTypes.map(type =>
                   editingType && editingType.id === type.id ? (
-                    <div key={type.id} className="flex items-center bg-[#363333] border border-[#E16428]/30 rounded-full px-3 py-1 space-x-2 shadow transition">
+                    <div
+                      key={type.id}
+                      className="flex items-center gap-2 py-3 border-b border-[#E16428]/25"
+                    >
                       <input
                         value={typeInput}
                         onChange={e => setTypeInput(e.target.value)}
-                        className="bg-transparent border-none outline-none text-[#F6E9E9] px-1 text-sm"
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            updateType();
+                          } else if (e.key === 'Escape') {
+                            setEditingType(null);
+                          }
+                        }}
+                        autoFocus
+                        className="underline-field flex-1 min-w-0 px-0 py-1 bg-transparent border-0 border-b border-[#E16428]/40 rounded-none text-[#F6E9E9] text-sm font-['Inter'] focus:border-[#E16428] focus:outline-none"
                       />
-                      <button onClick={updateType} className="text-green-500"><Save className="w-4 h-4" /></button>
-                      <button onClick={() => setEditingType(null)} className="text-red-500"><X className="w-4 h-4" /></button>
+                      <button
+                        type="button"
+                        onClick={updateType}
+                        className="p-1.5 text-emerald-400/80 hover:text-emerald-400 transition-colors"
+                        aria-label="Save"
+                      >
+                        <Save className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditingType(null)}
+                        className="p-1.5 text-[#F6E9E9]/40 hover:text-[#E16428] transition-colors"
+                        aria-label="Cancel"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
                     </div>
                   ) : (
-                    <div key={type.id} className="flex items-center bg-[#272121]/70 border border-[#E16428]/20 rounded-full px-3 sm:px-4 py-1.5 sm:py-2 space-x-2 shadow hover:scale-105 transition cursor-pointer">
-                      <Layers className="w-3 h-3 sm:w-4 sm:h-4 text-[#E16428]" />
-                      <span className="text-[#F6E9E9] font-medium text-xs sm:text-sm">{type.name}</span>
-                      <button onClick={() => { setEditingType(type); setTypeInput(type.name); }} className="text-blue-400 hover:scale-110 transition"><Edit className="w-4 h-4" /></button>
-                      <button onClick={() => setShowDeleteModal(type)} className="text-red-400 hover:scale-110 transition"><Trash2 className="w-4 h-4" /></button>
+                    <div
+                      key={type.id}
+                      className="group flex items-center gap-3 py-3 border-b border-[#E16428]/15 hover:border-[#E16428]/35 transition-colors"
+                    >
+                      <span className="flex-1 min-w-0 text-[#F6E9E9] text-sm font-['Inter'] truncate">
+                        {type.name}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingType(type);
+                          setTypeInput(type.name);
+                        }}
+                        className="p-1.5 text-[#F6E9E9]/35 hover:text-[#E16428] transition-colors opacity-70 group-hover:opacity-100"
+                        aria-label={`Edit ${type.name}`}
+                      >
+                        <Edit className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowDeleteModal(type)}
+                        className="p-1.5 text-[#F6E9E9]/35 hover:text-red-400 transition-colors opacity-70 group-hover:opacity-100"
+                        aria-label={`Delete ${type.name}`}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
                   )
                 )}
@@ -371,61 +599,169 @@ export const Settings: React.FC = () => {
           </section>
         )}
 
-        {activeTab === 'admin-password' && (
-          <section>
-            <h2 className="text-lg sm:text-xl font-bold text-[#F6E9E9] mb-4">Admin Password</h2>
-            <form onSubmit={handleChangePassword} className="space-y-3 max-w-md">
-              <input
-                type="password"
-                value={currentPassword}
-                onChange={e => setCurrentPassword(e.target.value)}
-                className="w-full px-3 py-2 rounded bg-[#272121]/50 border border-[#E16428]/20 text-[#F6E9E9] text-sm"
-                placeholder="Current password"
-                required
-              />
-              <input
-                type="password"
-                value={newPassword}
-                onChange={e => setNewPassword(e.target.value)}
-                className="w-full px-3 py-2 rounded bg-[#272121]/50 border border-[#E16428]/20 text-[#F6E9E9] text-sm"
-                placeholder="New password"
-                required
-              />
-              <input
-                type="password"
-                value={confirmPassword}
-                onChange={e => setConfirmPassword(e.target.value)}
-                className="w-full px-3 py-2 rounded bg-[#272121]/50 border border-[#E16428]/20 text-[#F6E9E9] text-sm"
-                placeholder="Confirm new password"
-                required
-              />
-              <button
-                type="submit"
-                disabled={isChangingPassword}
-                className="bg-[#E16428] text-white px-4 py-2 rounded hover:bg-[#d35400] w-full disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 flex items-center justify-center"
-              >
-                {isChangingPassword ? (
-                  <>
-                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    Changing...
-                  </>
-                ) : (
-                  'Change Password'
+        {activeTab === 'receipt-caption' && <ReceiptCaptionSettings />}
+
+        {activeTab === 'security' && <SecuritySettings />}
+
+        {activeTab === 'admin-account' && (
+          <section className="w-full">
+            <div className="flex flex-col-reverse sm:flex-row gap-6 sm:gap-8 items-start">
+              {/* Form content */}
+              <div className="flex-1 min-w-0 w-full">
+                {adminSubTab === 'email' && (
+                  <div>
+                    <h2 className="text-lg sm:text-xl font-bold text-[#F6E9E9] mb-1 font-['Playfair_Display']">
+                      Admin Email
+                    </h2>
+                    {currentEmail && (
+                      <p className="text-[#F6E9E9]/50 text-xs mb-4 font-['Inter']">
+                        Current: <span className="text-[#F6E9E9]/80">{currentEmail}</span>
+                      </p>
+                    )}
+                    <form onSubmit={handleChangeEmail} className="space-y-3 max-w-md">
+                      <input
+                        type="email"
+                        value={newEmail}
+                        onChange={e => setNewEmail(e.target.value)}
+                        className="underline-field w-full px-0 py-2.5 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] text-sm placeholder-[#F6E9E9]/35 focus:border-[#E16428] focus:outline-none transition-[border-color]"
+                        placeholder="New email"
+                        required
+                        autoComplete="email"
+                      />
+                      <input
+                        type="email"
+                        value={confirmEmail}
+                        onChange={e => setConfirmEmail(e.target.value)}
+                        className="underline-field w-full px-0 py-2.5 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] text-sm placeholder-[#F6E9E9]/35 focus:border-[#E16428] focus:outline-none transition-[border-color]"
+                        placeholder="Confirm new email"
+                        required
+                        autoComplete="email"
+                      />
+                      <input
+                        type="password"
+                        value={emailPassword}
+                        onChange={e => setEmailPassword(e.target.value)}
+                        className="underline-field w-full px-0 py-2.5 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] text-sm placeholder-[#F6E9E9]/35 focus:border-[#E16428] focus:outline-none transition-[border-color]"
+                        placeholder="Current password"
+                        required
+                        autoComplete="current-password"
+                      />
+                      <button
+                        type="submit"
+                        disabled={isChangingEmail}
+                        className="mt-1 bg-[#E16428] text-white px-4 py-2.5 rounded-lg hover:bg-[#d35400] w-full disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200 flex items-center justify-center text-sm font-medium"
+                      >
+                        {isChangingEmail ? 'Updating…' : 'Update Email'}
+                      </button>
+                      {emailMsg && (
+                        <div
+                          className={`p-3 rounded-lg text-sm font-['Inter'] ${
+                            emailMsgType === 'success'
+                              ? 'bg-green-500/20 border border-green-500/30 text-green-400'
+                              : 'bg-red-500/20 border border-red-500/30 text-red-400'
+                          }`}
+                        >
+                          {emailMsg}
+                        </div>
+                      )}
+                    </form>
+                  </div>
                 )}
-              </button>
-              {passwordMsg && (
-                <div className={`p-3 rounded-lg text-sm font-['Inter'] ${
-                  passwordMsgType === 'success' 
-                    ? 'bg-green-500/20 border border-green-500/30 text-green-400' 
-                    : 'bg-red-500/20 border border-red-500/30 text-red-400'
-                }`}>
-                  {passwordMsg}
+
+                {adminSubTab === 'password' && (
+                  <div>
+                    <h2 className="text-lg sm:text-xl font-bold text-[#F6E9E9] mb-4 font-['Playfair_Display']">
+                      Admin Password
+                    </h2>
+                    <form onSubmit={handleChangePassword} className="space-y-3 max-w-md">
+                      <input
+                        type="password"
+                        value={currentPassword}
+                        onChange={e => setCurrentPassword(e.target.value)}
+                        className="underline-field w-full px-0 py-2.5 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] text-sm placeholder-[#F6E9E9]/35 focus:border-[#E16428] focus:outline-none transition-[border-color]"
+                        placeholder="Current password"
+                        required
+                      />
+                      <input
+                        type="password"
+                        value={newPassword}
+                        onChange={e => setNewPassword(e.target.value)}
+                        className="underline-field w-full px-0 py-2.5 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] text-sm placeholder-[#F6E9E9]/35 focus:border-[#E16428] focus:outline-none transition-[border-color]"
+                        placeholder="New password"
+                        required
+                      />
+                      <input
+                        type="password"
+                        value={confirmPassword}
+                        onChange={e => setConfirmPassword(e.target.value)}
+                        className="underline-field w-full px-0 py-2.5 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] text-sm placeholder-[#F6E9E9]/35 focus:border-[#E16428] focus:outline-none transition-[border-color]"
+                        placeholder="Confirm new password"
+                        required
+                      />
+                      <button
+                        type="submit"
+                        disabled={isChangingPassword}
+                        className="mt-1 bg-[#E16428] text-white px-4 py-2.5 rounded-lg hover:bg-[#d35400] w-full disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200 flex items-center justify-center text-sm font-medium"
+                      >
+                        {isChangingPassword ? (
+                          <>
+                            <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Changing...
+                          </>
+                        ) : (
+                          'Change Password'
+                        )}
+                      </button>
+                      {passwordMsg && (
+                        <div className={`p-3 rounded-lg text-sm font-['Inter'] ${
+                          passwordMsgType === 'success'
+                            ? 'bg-green-500/20 border border-green-500/30 text-green-400'
+                            : 'bg-red-500/20 border border-red-500/30 text-red-400'
+                        }`}>
+                          {passwordMsg}
+                        </div>
+                      )}
+                    </form>
+                  </div>
+                )}
+              </div>
+
+              {/* Right side panel: Email / Password */}
+              <aside className="w-full sm:w-40 shrink-0 sm:sticky sm:top-24">
+                <p className="text-[11px] tracking-[0.12em] uppercase text-[#F6E9E9]/35 font-['Inter'] mb-2.5">
+                  Account
+                </p>
+                <div className="flex sm:flex-col gap-1.5 overflow-x-auto sm:overflow-visible pb-1 sm:pb-0">
+                  <button
+                    type="button"
+                    onClick={() => setAdminSubTab('email')}
+                    className={`flex items-center gap-2 shrink-0 sm:w-full px-1 py-2.5 border-0 border-b-2 rounded-none bg-transparent text-left text-xs font-['Inter'] transition-colors ${
+                      adminSubTab === 'email'
+                        ? 'border-[#E16428] text-[#E16428]'
+                        : 'border-transparent text-[#F6E9E9]/65 hover:text-[#E16428] hover:border-[#E16428]/35'
+                    }`}
+                  >
+                    <Mail className="w-3.5 h-3.5 shrink-0" />
+                    Email
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAdminSubTab('password')}
+                    className={`flex items-center gap-2 shrink-0 sm:w-full px-1 py-2.5 border-0 border-b-2 rounded-none bg-transparent text-left text-xs font-['Inter'] transition-colors ${
+                      adminSubTab === 'password'
+                        ? 'border-[#E16428] text-[#E16428]'
+                        : 'border-transparent text-[#F6E9E9]/65 hover:text-[#E16428] hover:border-[#E16428]/35'
+                    }`}
+                  >
+                    <Lock className="w-3.5 h-3.5 shrink-0" />
+                    Password
+                  </button>
                 </div>
-              )}
-            </form>
+              </aside>
+            </div>
           </section>
         )}
       </div>

@@ -22,17 +22,18 @@ import { realtimeManager } from '../lib/realtimeManager';
 
 // Map database row to Employee object
 const mapEmployeeFromDB = (employee: any): Employee => ({
-  id: employee.id,
-  employeeId: employee.employee_id,
-  birthday: employee.birthday,
-  firstName: employee.first_name,
-  lastName: employee.last_name,
-  position: employee.position,
-  address: employee.address,
-  whatsappNumber: employee.whatsapp,
-  emailAddress: employee.email,
-  qualifications: employee.qualifications,
-  createdAt: employee.created_at,
+  id: String(employee.id),
+  employeeId: employee.employeeId ?? employee.employee_id,
+  birthday: employee.birthday ?? '',
+  firstName: employee.firstName ?? employee.first_name,
+  lastName: employee.lastName ?? employee.last_name,
+  position: employee.position ?? '',
+  address: employee.address ?? '',
+  whatsappNumber: employee.whatsappNumber ?? employee.whatsapp ?? '',
+  emailAddress: employee.emailAddress ?? employee.email ?? '',
+  qualifications: employee.qualifications ?? '',
+  isActive: employee.isActive ?? employee.is_active ?? true,
+  createdAt: employee.createdAt ?? employee.created_at,
 });
 
 // Map Employee object to database row
@@ -46,6 +47,7 @@ const mapEmployeeToDB = (employee: Omit<Employee, 'id'>) => ({
   whatsapp: employee.whatsappNumber,
   email: employee.emailAddress,
   qualifications: employee.qualifications,
+  is_active: employee.isActive !== false,
 });
 
 export interface UseEmployeesOfflineReturn {
@@ -215,6 +217,7 @@ export const useEmployeesOffline = (): UseEmployeesOfflineReturn => {
       if (updates.whatsappNumber !== undefined) updateData.whatsapp = updates.whatsappNumber;
       if (updates.emailAddress !== undefined) updateData.email = updates.emailAddress;
       if (updates.qualifications !== undefined) updateData.qualifications = updates.qualifications;
+      if (updates.isActive !== undefined) updateData.is_active = updates.isActive;
 
       // Optimistically update state
       const updatedEmployee = { ...currentEmployee, ...updates };
@@ -340,7 +343,10 @@ export const useEmployeesOffline = (): UseEmployeesOfflineReturn => {
     // Subscribe to realtime changes
     const unsubscribe = realtimeManager.subscribeToEmployees((event) => {
       console.log('📡 Realtime employee update:', event.eventType);
-      loadEmployees();
+      // Only reload when offline - when online, realtime updates are handled by sync
+      if (!navigator.onLine) {
+        loadEmployees();
+      }
     });
 
     // Subscribe to sync events
@@ -350,8 +356,16 @@ export const useEmployeesOffline = (): UseEmployeesOfflineReturn => {
       } else if (event.type === 'sync-complete' || event.type === 'sync-error') {
         setIsSyncing(false);
         updatePendingCount();
+        // Don't refresh when online - data is already synced in background
+        // Only refresh when offline to get latest from IndexedDB
+        if (!navigator.onLine) {
+          loadEmployees();
+        }
       } else if (event.type === 'data-updated') {
-        loadEmployees();
+        // Only refresh when offline - when online, hold current data
+        if (!navigator.onLine) {
+          loadEmployees();
+        }
       }
     });
 
@@ -361,8 +375,14 @@ export const useEmployeesOffline = (): UseEmployeesOfflineReturn => {
     };
   }, [loadEmployees, updatePendingCount]);
 
-  // Auto-sync when coming back online
+  // Auto-sync when coming back online and refresh when going offline
   useEffect(() => {
+    // Detect transition from online to offline - refresh data from IndexedDB
+    if (!isOnline && wasOnline.current) {
+      console.log('📴 Going offline - refreshing from IndexedDB...');
+      loadEmployees();
+    }
+
     if (isOnline && !wasOnline.current && pendingChanges > 0) {
       console.log('🌐 Back online with pending changes, syncing...');
       syncNow();
@@ -372,7 +392,7 @@ export const useEmployeesOffline = (): UseEmployeesOfflineReturn => {
     if (isOnline && !realtimeManager.isConnected()) {
       realtimeManager.initialize();
     }
-  }, [isOnline, pendingChanges]);
+  }, [isOnline, pendingChanges, loadEmployees]);
 
   return {
     employees,

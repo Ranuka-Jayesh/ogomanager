@@ -1,5 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { LayoutDashboard, FolderOpen, CalendarDays, Users, BarChart3, Settings, X, ChevronLeft, ChevronRight, LogOut, Keyboard } from 'lucide-react';
+import {
+  LayoutDashboard,
+  FolderOpen,
+  CalendarDays,
+  Users,
+  BarChart3,
+  Settings,
+  X,
+  ChevronLeft,
+  ChevronRight,
+  LogOut,
+  Keyboard,
+} from 'lucide-react';
 
 interface NavigationProps {
   activeTab: string;
@@ -11,60 +23,54 @@ interface NavigationProps {
   onLogout: () => void;
 }
 
-export const Navigation: React.FC<NavigationProps> = ({ 
-  activeTab, 
-  setActiveTab, 
-  collapsed, 
-  mobileOpen, 
-  onMobileClose, 
+const navItems = [
+  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, shortcut: 'Alt+1', key: '1' },
+  { id: 'projects', label: 'Projects', icon: FolderOpen, shortcut: 'Alt+2', key: '2' },
+  { id: 'calendar', label: 'Calendar', icon: CalendarDays, shortcut: 'Alt+3', key: '3' },
+  { id: 'employees', label: 'Employees', icon: Users, shortcut: 'Alt+4', key: '4' },
+  { id: 'analytics', label: 'Analytics', icon: BarChart3, shortcut: 'Alt+5', key: '5' },
+  { id: 'settings', label: 'Settings', icon: Settings, shortcut: 'Alt+6', key: '6' },
+] as const;
+
+export const Navigation: React.FC<NavigationProps> = ({
+  activeTab,
+  setActiveTab,
+  collapsed,
+  mobileOpen,
+  onMobileClose,
   onSidebarToggle,
-  onLogout
+  onLogout,
 }) => {
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
-  
-  const navItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, shortcut: 'Alt + 1' },
-    { id: 'projects', label: 'Projects', icon: FolderOpen, shortcut: 'Alt + 2' },
-    { id: 'calendar', label: 'Calendar', icon: CalendarDays, shortcut: 'Alt + 3' },
-    { id: 'employees', label: 'Employees', icon: Users, shortcut: 'Alt + 4' },
-    { id: 'analytics', label: 'Analytics', icon: BarChart3, shortcut: 'Alt + 5' },
-    { id: 'settings', label: 'Settings', icon: Settings, shortcut: 'Alt + 6' },
-  ];
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
 
-  // Keyboard shortcuts for navigation and help
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Prevent shortcuts when typing in input fields
-      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement) {
+      if (
+        event.target instanceof HTMLInputElement ||
+        event.target instanceof HTMLTextAreaElement ||
+        event.target instanceof HTMLSelectElement
+      ) {
         return;
       }
 
-      // Alt + 1-6: Navigate to different tabs
       if (event.altKey && /^[1-6]$/.test(event.key)) {
         event.preventDefault();
-        const tabIndex = parseInt(event.key) - 1;
+        const tabIndex = parseInt(event.key, 10) - 1;
         if (navItems[tabIndex]) {
           setActiveTab(navItems[tabIndex].id);
-          // Close mobile menu if open
-          if (mobileOpen) {
-            onMobileClose();
-          }
+          if (mobileOpen) onMobileClose();
         }
       }
 
-      // Ctrl + /: Show shortcuts help
       if (event.ctrlKey && event.key === '/') {
         event.preventDefault();
         setShowShortcutsHelp(true);
       }
 
-      // Escape: Close shortcuts help
       if (event.key === 'Escape' && showShortcutsHelp) {
         setShowShortcutsHelp(false);
       }
-
-      // Alt + L: Logout (handled in App component)
-      // Removed from here to avoid conflicts
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -76,268 +82,383 @@ export const Navigation: React.FC<NavigationProps> = ({
     onMobileClose();
   };
 
+  const renderNavButton = (
+    item: (typeof navItems)[number],
+    opts: { compact?: boolean; mobile?: boolean } = {}
+  ) => {
+    const Icon = item.icon;
+    const isActive = activeTab === item.id;
+    const isHovered = hoveredId === item.id;
+    const compact = !!opts.compact;
+    const mobile = !!opts.mobile;
+
+    return (
+      <button
+        key={item.id}
+        type="button"
+        onClick={() => (mobile ? handleItemClick(item.id) : setActiveTab(item.id))}
+        onMouseEnter={() => setHoveredId(item.id)}
+        onMouseLeave={() => setHoveredId(null)}
+        title={`${item.label} (${item.shortcut})`}
+        className={`group relative w-full flex items-center gap-3 overflow-hidden bg-transparent border-0 rounded-none transition-all duration-300 focus:outline-none ${
+          compact ? 'justify-center px-0 py-3.5' : 'px-3 py-3'
+        } ${isActive ? 'text-[#E16428]' : 'text-[#F6E9E9]/55 hover:text-[#F6E9E9]'}`}
+      >
+        {/* Active / hover rail */}
+        <span
+          className={`absolute left-0 top-1/2 -translate-y-1/2 w-[2px] rounded-full bg-[#E16428] transition-all duration-300 ease-out ${
+            isActive
+              ? 'h-7 opacity-100 shadow-[0_0_12px_rgba(225,100,40,0.55)]'
+              : isHovered
+                ? 'h-4 opacity-50'
+                : 'h-0 opacity-0'
+          }`}
+        />
+
+        <Icon
+          className={`w-[1.15rem] h-[1.15rem] shrink-0 transition-transform duration-300 ${
+            isActive || isHovered ? 'scale-110' : 'scale-100'
+          } ${isActive ? 'text-[#E16428]' : ''}`}
+          strokeWidth={isActive ? 2.25 : 1.75}
+        />
+
+        {!compact && (
+          <>
+            <span
+              className={`flex-1 text-left text-[13px] font-['Inter'] tracking-wide transition-all duration-300 ${
+                isActive ? 'font-medium' : 'font-normal'
+              }`}
+            >
+              {item.label}
+            </span>
+            <span
+              className={`text-[10px] font-mono tracking-wider transition-all duration-300 ${
+                isActive
+                  ? 'text-[#E16428]/70 opacity-100'
+                  : 'text-[#F6E9E9]/25 opacity-0 group-hover:opacity-100'
+              }`}
+            >
+              {item.key}
+            </span>
+            {/* Underline grow */}
+            <span
+              className={`absolute bottom-1.5 left-3 right-3 h-px origin-left bg-gradient-to-r from-[#E16428]/80 to-transparent transition-transform duration-300 ease-out ${
+                isActive ? 'scale-x-100' : 'scale-x-0 group-hover:scale-x-50'
+              }`}
+            />
+          </>
+        )}
+
+        {/* Collapsed flyout tip */}
+        {compact && (
+          <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 z-50 flex items-center gap-2 opacity-0 translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all duration-200">
+            <span className="h-px w-2 bg-[#E16428]/50" />
+            <span className="whitespace-nowrap px-0 py-0.5 text-[12px] font-['Inter'] text-[#F6E9E9] border-b border-[#E16428]/40">
+              {item.label}
+              <span className="ml-2 font-mono text-[10px] text-[#E16428]/80">{item.shortcut}</span>
+            </span>
+          </span>
+        )}
+      </button>
+    );
+  };
+
   return (
     <>
-      {/* Mobile Overlay */}
+      {/* Mobile overlay */}
       {mobileOpen && (
-        <div 
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 lg:hidden"
+        <div
+          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden animate-fadeIn"
           onClick={onMobileClose}
         />
       )}
 
-      {/* Desktop Sidebar */}
-      <nav className={`fixed left-0 top-16 sm:top-20 bottom-0 z-30 backdrop-blur-md bg-[#272121]/30 border-r border-[#E16428]/20 transition-all duration-300 ease-in-out hidden lg:block ${
-        collapsed ? 'w-20' : 'w-64'
-      }`}>
-        <div className="flex flex-col h-full">
-          <div className="p-4 space-y-2 flex-1">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                onClick={() => setActiveTab(item.id)}
-                className={`w-full flex items-center ${collapsed ? 'justify-center' : 'space-x-3'} px-4 py-3 rounded-lg transition-all duration-300 font-['Poppins'] group ${
-                  isActive
-                    ? 'bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white shadow-lg scale-105'
-                    : 'text-[#F6E9E9]/80 hover:bg-[#E16428]/10 hover:text-[#F6E9E9] hover:scale-102'
-                }`}
-                title={collapsed ? `${item.label} (${item.shortcut})` : `${item.label} (${item.shortcut})`}
-              >
-                <Icon className="w-5 h-5 flex-shrink-0" />
-                {!collapsed && (
-                  <div className="flex items-center justify-between w-full">
-                    <span className="font-medium">{item.label}</span>
-                    <kbd className="px-2 py-1 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                      {item.shortcut.split(' ')[1]}
-                    </kbd>
-                  </div>
-                )}
-                {/* Tooltip for collapsed state */}
-                {collapsed && (
-                  <div className="absolute left-16 bg-[#272121] text-[#F6E9E9] px-2 py-1 rounded text-sm opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
-                    {item.label} ({item.shortcut})
-                  </div>
-                )}
-              </button>
-            );
-          })}
+      {/* Desktop sidebar */}
+      <nav
+        className={`fixed left-0 top-16 sm:top-20 bottom-0 z-30 hidden lg:flex flex-col transition-all duration-300 ease-out ${
+          collapsed ? 'w-20' : 'w-64'
+        }`}
+      >
+        {/* Soft vertical atmosphere */}
+        <div
+          className="pointer-events-none absolute inset-0 border-r border-[#E16428]/15"
+          style={{
+            background:
+              'linear-gradient(180deg, rgba(39,33,33,0.55) 0%, rgba(26,24,24,0.35) 45%, rgba(39,33,33,0.5) 100%)',
+          }}
+        />
+        <div
+          className="pointer-events-none absolute top-0 right-0 w-px h-full opacity-60"
+          style={{
+            background:
+              'linear-gradient(180deg, transparent 0%, rgba(225,100,40,0.45) 30%, rgba(225,100,40,0.15) 70%, transparent 100%)',
+          }}
+        />
+
+        <div className="relative flex flex-col h-full min-h-0">
+          {/* Brand strip (expanded only) */}
+          {!collapsed && (
+            <div className="shrink-0 pt-5 pb-3 px-4 transition-all duration-300">
+              <div className="pl-1">
+                <p className="text-[10px] tracking-[0.22em] uppercase text-[#E16428]/80 font-['Inter']">
+                  Navigate
+                </p>
+                <p className="mt-0.5 text-[11px] text-[#F6E9E9]/30 font-['Inter']">
+                  Alt + 1–6
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Nav items */}
+          <div
+            className={`flex-1 min-h-0 overflow-y-auto overflow-x-visible py-1 space-y-0.5 ${
+              collapsed ? 'px-2' : 'px-2'
+            }`}
+          >
+            {navItems.map(item => renderNavButton(item, { compact: collapsed }))}
           </div>
-          {/* Sidebar Collapse/Expand Button */}
-          <div className={`p-4 border-t border-[#E16428]/10 transition-all duration-300 ${collapsed ? 'flex justify-center' : 'flex justify-end'}`}>
+
+          {/* Collapse control */}
+          <div
+            className={`shrink-0 py-2 flex ${collapsed ? 'justify-center px-2' : 'justify-end px-3'}`}
+          >
             <button
+              type="button"
               onClick={onSidebarToggle}
-              className="p-2 bg-transparent rounded-full hover:bg-[#E16428]/10 text-[#F6E9E9]/70 hover:text-[#F6E9E9] transition-all duration-300"
+              className="group flex items-center gap-1.5 p-2 bg-transparent border-0 border-b border-transparent rounded-none text-[#F6E9E9]/35 hover:text-[#E16428] hover:border-[#E16428]/40 transition-all duration-200 focus:outline-none"
               title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             >
               {collapsed ? (
-                <ChevronRight className="w-5 h-5" />
+                <ChevronRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
               ) : (
-                <ChevronLeft className="w-5 h-5" />
+                <>
+                  <span className="text-[10px] tracking-wider uppercase font-['Inter']">Hide</span>
+                  <ChevronLeft className="w-4 h-4" />
+                </>
               )}
             </button>
           </div>
-          
-          {/* Sidebar Footer */}
-          <div className="p-4 border-t border-[#E16428]/10">
-            {/* Shortcuts Help Button */}
+
+          {/* Footer */}
+          <div
+            className={`shrink-0 pb-4 pt-2 border-t border-[#E16428]/10 ${
+              collapsed ? 'px-2' : 'px-3'
+            }`}
+          >
             <button
+              type="button"
               onClick={() => setShowShortcutsHelp(true)}
-              className={`w-full flex items-center ${collapsed ? 'justify-center' : 'space-x-3'} px-4 py-3 mb-3 rounded-lg transition-all duration-300 font-['Poppins'] text-[#E16428] hover:bg-[#E16428]/10 hover:text-[#E16428]/80 hover:scale-102`}
-              title={collapsed ? 'Shortcuts (Ctrl+/)' : 'Keyboard Shortcuts (Ctrl+/)'}
+              title="Keyboard Shortcuts (Ctrl+/)"
+              className={`group relative w-full flex items-center gap-3 bg-transparent border-0 rounded-none text-[#F6E9E9]/45 hover:text-[#E16428] transition-colors duration-200 focus:outline-none ${
+                collapsed ? 'justify-center py-3' : 'px-3 py-2.5'
+              }`}
             >
-              <Keyboard className="w-5 h-5 flex-shrink-0" />
-              {!collapsed && <span className="font-medium">Shortcuts</span>}
-              {/* Tooltip for collapsed state */}
+              <Keyboard className="w-4 h-4 shrink-0" strokeWidth={1.75} />
+              {!collapsed && (
+                <span className="flex-1 text-left text-[12px] font-['Inter']">Shortcuts</span>
+              )}
+              {!collapsed && (
+                <kbd className="text-[10px] font-mono text-[#E16428]/50 group-hover:text-[#E16428]/80">
+                  /
+                </kbd>
+              )}
               {collapsed && (
-                <div className="absolute left-16 bg-[#272121] text-[#E16428] px-2 py-1 rounded text-sm opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
-                  Shortcuts (Ctrl+/)
-                </div>
+                <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 z-50 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap text-[12px] text-[#E16428] border-b border-[#E16428]/40">
+                  Shortcuts · Ctrl+/
+                </span>
               )}
             </button>
-            
-            {/* Logout Button */}
+
             <button
+              type="button"
               onClick={onLogout}
               data-shortcut="logout"
-              className={`w-full flex items-center ${collapsed ? 'justify-center' : 'space-x-3'} px-4 py-3 mb-3 rounded-lg transition-all duration-300 font-['Poppins'] text-red-400 hover:bg-red-500/10 hover:text-red-300 hover:scale-102`}
-              title={collapsed ? 'Logout (Alt+L)' : 'Logout (Alt+L)'}
+              title="Logout (Alt+L)"
+              className={`group relative w-full flex items-center gap-3 bg-transparent border-0 rounded-none text-[#F6E9E9]/40 hover:text-red-400 transition-colors duration-200 focus:outline-none ${
+                collapsed ? 'justify-center py-3' : 'px-3 py-2.5'
+              }`}
             >
-              <LogOut className="w-5 h-5 flex-shrink-0" />
-              {!collapsed && <span className="font-medium">Logout</span>}
-              {/* Tooltip for collapsed state */}
+              <LogOut className="w-4 h-4 shrink-0 transition-transform duration-300 group-hover:translate-x-0.5" strokeWidth={1.75} />
+              {!collapsed && (
+                <span className="flex-1 text-left text-[12px] font-['Inter']">Logout</span>
+              )}
+              {!collapsed && (
+                <kbd className="text-[10px] font-mono text-red-400/40 group-hover:text-red-400/70">
+                  L
+                </kbd>
+              )}
               {collapsed && (
-                <div className="absolute left-16 bg-[#272121] text-red-400 px-2 py-1 rounded text-sm opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
-                  Logout (Alt+L)
-                </div>
+                <span className="pointer-events-none absolute left-[calc(100%+10px)] top-1/2 -translate-y-1/2 z-50 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap text-[12px] text-red-400 border-b border-red-400/40">
+                  Logout · Alt+L
+                </span>
               )}
             </button>
-            <div className={`transition-all duration-300 ${collapsed ? 'opacity-0 h-0 overflow-hidden' : 'opacity-100'}`}>
-              <p className="text-xs text-center text-[#F6E9E9]/50 font-['Poppins']">
-                ogo manager V.10
+
+            <div
+              className={`mt-3 text-center transition-all duration-300 overflow-hidden ${
+                collapsed ? 'max-h-0 opacity-0' : 'max-h-12 opacity-100'
+              }`}
+            >
+              <p className="text-[10px] tracking-[0.14em] uppercase text-[#F6E9E9]/30 font-['Inter']">
+                ogo manager
               </p>
-              <p className="text-xs text-center text-[#F6E9E9]/30 font-['Poppins'] mt-1">
-                2025 - 2026
-              </p>
+              <p className="text-[10px] text-[#E16428]/50 font-mono mt-0.5">V.26 · 2026</p>
             </div>
+            {collapsed && (
+              <p className="mt-2 text-center text-[9px] font-mono text-[#E16428]/40">26</p>
+            )}
           </div>
         </div>
       </nav>
 
-      {/* Mobile Sidebar */}
-      <nav className={`fixed left-0 top-0 bottom-0 z-50 w-64 backdrop-blur-md bg-[#272121]/95 border-r border-[#E16428]/20 transform transition-transform duration-300 ease-in-out lg:hidden flex flex-col ${
-        mobileOpen ? 'translate-x-0' : '-translate-x-full'
-      }`}>
-        <div className="p-4 flex-1 overflow-y-auto">
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 flex items-center justify-center">
-                <img
-                  src="/2OGOlogo.png"
-                  alt="OGO Logo"
-                  className="w-10 h-10 object-contain rounded-xl shadow-lg p-1 border-0 sm:border-2 sm:border-white"
-                />
-              </div>
-              <h2 className="text-lg font-bold text-[#F6E9E9] font-['Playfair_Display']">
+      {/* Mobile sidebar */}
+      <nav
+        className={`fixed left-0 top-0 bottom-0 z-50 w-[min(18rem,88vw)] flex flex-col lg:hidden transition-transform duration-300 ease-out ${
+          mobileOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+        style={{
+          background:
+            'linear-gradient(165deg, rgba(39,33,33,0.98) 0%, rgba(26,24,24,0.97) 50%, rgba(39,33,33,0.98) 100%)',
+          borderRight: '1px solid rgba(225,100,40,0.18)',
+        }}
+      >
+        <div className="flex items-center justify-between gap-3 px-4 pt-5 pb-4 border-b border-[#E16428]/12">
+          <div className="flex items-center gap-3 min-w-0">
+            <img
+              src="/logo_ogo.png"
+              alt="OGO"
+              className="w-11 h-11 object-contain shrink-0"
+            />
+            <div className="min-w-0">
+              <h2 className="text-lg font-semibold text-[#F6E9E9] font-['Playfair_Display'] truncate leading-tight">
                 Manager Pro
               </h2>
+              <p className="text-[10px] tracking-[0.16em] uppercase text-[#E16428]/70 font-['Inter']">
+                Menu
+              </p>
             </div>
-            <button
-              onClick={onMobileClose}
-              className="p-2 bg-[#272121]/50 text-[#F6E9E9] rounded-lg hover:bg-[#E16428]/20 transition-all duration-300"
-            >
-              <X className="w-5 h-5" />
-            </button>
           </div>
-
-          <div className="space-y-2">
-            {navItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = activeTab === item.id;
-              
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => handleItemClick(item.id)}
-                  className={`w-full flex items-center px-4 py-3 rounded-lg transition-all duration-300 font-['Poppins'] ${
-                    isActive
-                      ? 'bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white shadow-lg'
-                      : 'text-[#F6E9E9]/80 hover:bg-[#E16428]/10 hover:text-[#F6E9E9]'
-                  }`}
-                  title={`${item.label} (${item.shortcut})`}
-                >
-                  <div className="flex items-center space-x-3">
-                    <Icon className="w-5 h-5" />
-                    <span className="font-medium">{item.label}</span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        
-        {/* Mobile Sidebar Footer */}
-        <div className="p-4 border-t border-[#E16428]/10 flex-shrink-0">
-          {/* Mobile Logout Button */}
           <button
+            type="button"
+            onClick={onMobileClose}
+            className="p-2 bg-transparent border-0 border-b border-transparent rounded-none text-[#F6E9E9]/50 hover:text-[#E16428] hover:border-[#E16428]/40 transition-colors focus:outline-none"
+            aria-label="Close menu"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-2 py-3 space-y-0.5">
+          {navItems.map(item => renderNavButton(item, { mobile: true }))}
+        </div>
+
+        <div className="shrink-0 px-3 pb-5 pt-2 border-t border-[#E16428]/12">
+          <button
+            type="button"
+            onClick={() => {
+              setShowShortcutsHelp(true);
+              onMobileClose();
+            }}
+            className="w-full flex items-center gap-3 px-3 py-2.5 bg-transparent border-0 rounded-none text-[#F6E9E9]/45 hover:text-[#E16428] transition-colors font-['Inter'] text-[12px] focus:outline-none"
+          >
+            <Keyboard className="w-4 h-4" strokeWidth={1.75} />
+            Shortcuts
+          </button>
+          <button
+            type="button"
             onClick={() => {
               onLogout();
               onMobileClose();
             }}
             data-shortcut="logout"
-            className="w-full flex items-center space-x-3 px-4 py-3 mb-3 rounded-lg transition-all duration-300 font-['Poppins'] text-red-400 hover:bg-red-500/10 hover:text-red-300"
-            title="Logout (Alt+L)"
+            className="w-full flex items-center gap-3 px-3 py-2.5 bg-transparent border-0 rounded-none text-[#F6E9E9]/40 hover:text-red-400 transition-colors font-['Inter'] text-[12px] focus:outline-none"
           >
-            <LogOut className="w-5 h-5" />
-            <span className="font-medium">Logout</span>
+            <LogOut className="w-4 h-4" strokeWidth={1.75} />
+            Logout
           </button>
-          <p className="text-xs text-center text-[#F6E9E9]/50 font-['Poppins']">
-            ogo manager V.10
-          </p>
-          <p className="text-xs text-center text-[#F6E9E9]/30 font-['Poppins'] mt-1">
-            2025
+          <p className="mt-3 text-center text-[10px] tracking-[0.14em] uppercase text-[#F6E9E9]/28 font-['Inter']">
+            ogo manager · V.26
           </p>
         </div>
       </nav>
 
-      {/* Keyboard Shortcuts Help Popup */}
+      {/* Keyboard Shortcuts Help */}
       {showShortcutsHelp && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-[999] animate-fadeIn">
-          <div className="bg-[#272121] rounded-xl p-4 max-w-md w-full mx-4 border border-[#E16428]/20 shadow-2xl animate-scaleIn">
-            {/* Header */}
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <Keyboard className="w-5 h-5 text-[#E16428]" />
-                <h3 className="text-lg font-bold text-[#F6E9E9] font-['Inter']">
-                  Quick Shortcuts
-                </h3>
-              </div>
-              <button
-                onClick={() => setShowShortcutsHelp(false)}
-                className="p-1.5 hover:bg-[#363333] rounded-lg transition-all duration-200"
-                title="Close (Esc)"
-              >
-                <X className="w-4 h-4 text-[#F6E9E9]" />
-              </button>
-            </div>
-
-            {/* Compact Shortcuts List */}
-            <div className="space-y-2 mb-4">
-              <div className="grid grid-cols-2 gap-2 text-sm">
-                <div className="flex items-center justify-between p-2 bg-[#363333]/50 rounded-lg">
-                  <span className="text-[#F6E9E9]">Dashboard</span>
-                  <kbd className="px-1.5 py-0.5 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">Alt+1</kbd>
-                </div>
-                <div className="flex items-center justify-between p-2 bg-[#363333]/50 rounded-lg">
-                  <span className="text-[#F6E9E9]">Projects</span>
-                  <kbd className="px-1.5 py-0.5 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">Alt+2</kbd>
-                </div>
-                <div className="flex items-center justify-between p-2 bg-[#363333]/50 rounded-lg">
-                  <span className="text-[#F6E9E9]">Employees</span>
-                  <kbd className="px-1.5 py-0.5 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">Alt+3</kbd>
-                </div>
-                <div className="flex items-center justify-between p-2 bg-[#363333]/50 rounded-lg">
-                  <span className="text-[#F6E9E9]">Analytics</span>
-                  <kbd className="px-1.5 py-0.5 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">Alt+4</kbd>
-                </div>
-                <div className="flex items-center justify-between p-2 bg-[#363333]/50 rounded-lg">
-                  <span className="text-[#F6E9E9]">Calendar</span>
-                  <kbd className="px-1.5 py-0.5 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">Alt+5</kbd>
-                </div>
-                <div className="flex items-center justify-between p-2 bg-[#363333]/50 rounded-lg">
-                  <span className="text-[#F6E9E9]">Settings</span>
-                  <kbd className="px-1.5 py-0.5 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">Alt+6</kbd>
-                </div>
-                <div className="flex items-center justify-between p-2 bg-[#363333]/50 rounded-lg">
-                  <span className="text-[#F6E9E9]">Add Project</span>
-                  <kbd className="px-1.5 py-0.5 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">Alt+A</kbd>
-                </div>
-                <div className="flex items-center justify-between p-2 bg-[#363333]/50 rounded-lg">
-                  <span className="text-[#F6E9E9]">Search</span>
-                  <kbd className="px-1.5 py-0.5 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">Alt+K</kbd>
-                </div>
-                <div className="flex items-center justify-between p-2 bg-[#363333]/50 rounded-lg">
-                  <span className="text-[#F6E9E9]">Global Search</span>
-                  <kbd className="px-1.5 py-0.5 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">Ctrl+K</kbd>
-                </div>
-                <div className="flex items-center justify-between p-2 bg-[#363333]/50 rounded-lg">
-                  <span className="text-[#F6E9E9]">Logout</span>
-                  <kbd className="px-1.5 py-0.5 bg-[#E16428]/20 text-[#E16428] rounded text-xs font-mono">Alt+L</kbd>
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fadeIn"
+          onClick={() => setShowShortcutsHelp(false)}
+        >
+          <div
+            className="w-full max-w-[380px] p-6 animate-scaleIn"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="text-center mb-5">
+              <div className="relative mx-auto mb-4 h-[3.75rem] w-[3.75rem]">
+                <span
+                  className="absolute inset-0 rounded-full border border-[#E16428]/25 opacity-60"
+                  style={{ animation: 'shortcut-ring 2.4s ease-out infinite' }}
+                />
+                <span
+                  className="absolute inset-1.5 rounded-full border border-[#E16428]/15 opacity-50"
+                  style={{ animation: 'shortcut-ring 2.4s ease-out 0.55s infinite' }}
+                />
+                <div className="relative flex h-full w-full items-center justify-center rounded-full border border-[#E16428]/40 bg-gradient-to-br from-[#E16428]/15 to-transparent">
+                  <Keyboard className="h-5 w-5 text-[#E16428]" />
                 </div>
               </div>
+              <h3 className="text-2xl font-semibold tracking-tight text-[#F6E9E9] font-['Playfair_Display']">
+                Quick keys
+              </h3>
+              <p className="mt-1 text-[12px] text-[#F6E9E9]/45 font-['Inter']">
+                Jump around without the mouse
+              </p>
             </div>
 
-            {/* Footer */}
-            <div className="text-center pt-2 border-t border-[#E16428]/20">
-              <button
-                onClick={() => setShowShortcutsHelp(false)}
-                className="px-4 py-2 bg-[#E16428] text-white rounded-lg hover:bg-[#E16428]/80 transition-all duration-300 text-sm font-medium"
-              >
-                Got it! (Esc)
-              </button>
+            <div className="grid grid-cols-2 gap-x-5 gap-y-1">
+              {[
+                ...navItems.map(item => ({
+                  label: item.label,
+                  keys: item.shortcut,
+                })),
+                { label: 'Add Project', keys: 'Alt+A' },
+                { label: 'Search', keys: 'Alt+K' },
+                { label: 'Global Search', keys: 'Ctrl+K' },
+                { label: 'Shortcuts', keys: 'Ctrl+/' },
+                { label: 'Logout', keys: 'Alt+L' },
+              ].map(row => (
+                <div
+                  key={row.label}
+                  className="flex items-center justify-between gap-2 py-2.5 border-b border-[#E16428]/15"
+                >
+                  <span className="text-[12px] sm:text-[13px] text-[#F6E9E9]/75 font-['Inter'] truncate">
+                    {row.label}
+                  </span>
+                  <kbd className="shrink-0 px-0 py-0.5 border-0 border-b border-[#E16428]/55 rounded-none bg-transparent text-[10px] sm:text-[11px] font-mono tracking-wide text-[#E16428]">
+                    {row.keys}
+                  </kbd>
+                </div>
+              ))}
             </div>
+
+            <button
+              type="button"
+              onClick={() => setShowShortcutsHelp(false)}
+              className="mt-5 w-full py-2.5 border-0 border-b-2 border-[#E16428] rounded-none bg-transparent text-sm font-medium text-[#E16428] hover:text-[#f07a42] hover:border-[#f07a42] transition-colors font-['Inter'] focus:outline-none"
+            >
+              Got it
+            </button>
+            <p className="mt-3 text-center text-[10px] tracking-[0.18em] uppercase text-[#F6E9E9]/25 font-['Inter']">
+              Esc to close
+            </p>
+
+            <style>{`
+              @keyframes shortcut-ring {
+                0% { transform: scale(0.85); opacity: 0.55; }
+                70% { transform: scale(1.25); opacity: 0; }
+                100% { transform: scale(1.25); opacity: 0; }
+              }
+            `}</style>
           </div>
         </div>
       )}

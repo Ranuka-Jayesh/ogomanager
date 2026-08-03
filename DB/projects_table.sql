@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS projects (
     employee_payments JSONB DEFAULT '[]'::jsonb, -- NEW: Array of {employeeId, payment} for multiple employee payment breakdown
     status VARCHAR(50) NOT NULL DEFAULT 'Pending' CHECK (status IN ('Running', 'Pending', 'Pending Payment', 'Delivered', 'Correction', 'Rejected')),
     fast_deliver BOOLEAN DEFAULT FALSE,
+    give_discount BOOLEAN DEFAULT FALSE,
+    discount_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -48,6 +50,8 @@ COMMENT ON COLUMN projects.payment_of_emp IS 'Total payment amount for all assig
 COMMENT ON COLUMN projects.employee_payments IS 'JSONB array storing individual employee payments: [{employeeId: uuid, payment: decimal}, ...]';
 COMMENT ON COLUMN projects.status IS 'Current status of the project';
 COMMENT ON COLUMN projects.fast_deliver IS 'Whether this is a fast delivery project';
+COMMENT ON COLUMN projects.give_discount IS 'Whether a discount was given on this project';
+COMMENT ON COLUMN projects.discount_amount IS 'Discount amount in LKR (used when give_discount is true)';
 COMMENT ON COLUMN projects.created_at IS 'Timestamp when the project was created';
 COMMENT ON COLUMN projects.updated_at IS 'Timestamp when the project was last updated';
 
