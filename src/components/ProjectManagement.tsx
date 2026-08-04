@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { Plus, Calendar, Loader2, ArrowUp, ArrowDown, Hash, ChevronDown, ChevronLeft, ChevronRight, List, PlayCircle, Hourglass, CreditCard, CheckCircle2, AlertTriangle, XCircle, CircleDot } from 'lucide-react';
 import { Project, Employee, EmployeePayment } from '../types';
 import { ProjectModal } from './ProjectModal';
@@ -736,7 +737,7 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
     <div 
       ref={scrollContainerRef}
       onScroll={handleScroll}
-      className="flex flex-col gap-3 sm:gap-4 w-full min-w-0 h-[calc(100dvh-4.75rem)] sm:h-[calc(100dvh-5.75rem)] lg:h-auto lg:max-h-none overflow-y-auto lg:overflow-visible overscroll-contain animate-fadeIn"
+      className="flex flex-col gap-3 sm:gap-4 w-full min-w-0 h-[calc(100dvh-4.75rem)] sm:h-[calc(100dvh-5.75rem)] lg:h-auto lg:max-h-none overflow-y-auto lg:overflow-visible overscroll-contain animate-fadeIn pb-24"
     >
       <div className="flex flex-col gap-3 shrink-0 min-w-0">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 min-w-0">
@@ -1555,18 +1556,26 @@ export const ProjectManagement: React.FC<ProjectManagementProps> = ({
         <ArrowUp className="w-6 h-6" />
       </button>
 
-      <button
-        type="button"
-        onClick={handleAdd}
-        className="fixed bottom-6 right-6 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white w-12 h-12 min-w-[3rem] min-h-[3rem] aspect-square rounded-full flex items-center justify-center shadow-lg hover:scale-110 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#E16428] focus:ring-offset-[#272121] transition-all duration-300 z-[60] animate-pulse group p-0 lg:bottom-8 lg:right-8"
-        aria-label="Add Project (Alt+A)"
-        title="Add New Project (Alt+A)"
-      >
-        <Plus className="w-6 h-6" />
-        <div className="absolute -top-1 -right-1 bg-[#E16428] text-white text-xs px-1.5 py-0.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-300 font-mono">
-          A
-        </div>
-      </button>
+      {!isModalOpen &&
+        createPortal(
+          <div className="fixed bottom-5 sm:bottom-7 inset-x-0 z-40 flex justify-center pointer-events-none px-3">
+            <div className="pointer-events-auto flex items-center rounded-full bg-[#272121]/95 backdrop-blur-md border border-[#E16428]/25 shadow-xl shadow-black/40 pl-3.5 pr-1.5 py-1 gap-0.5 animate-fadeIn">
+              <button
+                type="button"
+                onClick={handleAdd}
+                className="px-2.5 sm:px-3 py-1.5 text-[#F6E9E9] text-sm font-['Poppins'] font-semibold hover:text-[#E16428] active:scale-95 transition-all"
+                aria-label="Add Project (Alt+A)"
+                title="Add New Project (Alt+A)"
+              >
+                Add Project
+              </button>
+              <div className="ml-1.5 shrink-0 w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-[#E16428] border-2 border-[#E16428]/80 flex items-center justify-center shadow-md">
+                <Plus className="w-4 h-4 text-white" strokeWidth={2.5} />
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 };

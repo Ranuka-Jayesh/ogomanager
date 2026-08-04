@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import ReactDOM from 'react-dom';
-import { DollarSign, Clock, CheckCircle, AlertCircle, FolderOpen, Eye, EyeOff, X, Lock, Fingerprint, KeyRound } from 'lucide-react';
+import { DollarSign, Clock, CheckCircle, AlertCircle, FolderOpen, Eye, EyeOff, X, Lock, Fingerprint, KeyRound, Bell } from 'lucide-react';
 import { Project, Employee } from '../types';
 import { GlassCard } from './GlassCard';
 import { MonthYearNavigator } from './MonthYearNavigator';
@@ -16,13 +16,36 @@ import {
   loadAdminSecurity,
 } from '../utils/adminSecurity';
 
+interface DueSoonSub {
+  id: string;
+  name: string;
+  next_renewal_date: string;
+  reminder_days_before: number;
+  amount: number;
+  image_url: string | null;
+}
+
+function parseLocalDate(iso: string): Date {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d, 12, 0, 0, 0);
+}
+
+function daysUntil(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const target = parseLocalDate(iso);
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  return Math.round((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+}
+
 interface DashboardProps {
   projects: Project[];
   employees: Employee[];
   onRefresh?: () => void;
+  onOpenExpenses?: () => void;
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRefresh }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRefresh, onOpenExpenses }) => {
   useSupabaseConnection();
   const { setLastRefresh } = useLastRefresh();
   const isMobile = useMobileDetection();
@@ -33,6 +56,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
   const [projectTypes, setProjectTypes] = React.useState<{ id: string; name: string }[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [completedCardSlide, setCompletedCardSlide] = useState(0); // 0 = Completed Projects, 1 = Running Projects
+  const [dueSoonSubs, setDueSoonSubs] = useState<DueSoonSub[]>([]);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
   
   // Privacy/Hide values state
   const [valuesHidden, setValuesHidden] = useState(true); // Start with values hidden
@@ -119,6 +144,87 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
 
     return () => clearInterval(slideInterval);
   }, []);
+
+  // Active subscriptions that are overdue or within reminder window
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('expenses')
+          .select('id, name, next_renewal_date, reminder_days_before, amount, image_url')
+          .eq('type', 'subscription')
+          .eq('status', 'active')
+          .not('next_renewal_date', 'is', null);
+
+        if (cancelled || error || !data) {
+          if (!cancelled && error) console.error('Failed to load subscription reminders', error);
+          return;
+        }
+
+        const due = (data as DueSoonSub[])
+          .filter(e => {
+            const days = daysUntil(e.next_renewal_date);
+            if (days === null) return false;
+            const window = e.reminder_days_before ?? 5;
+            return days <= window;
+          })
+          .sort(
+            (a, b) =>
+              (daysUntil(a.next_renewal_date) ?? 99) - (daysUntil(b.next_renewal_date) ?? 99)
+          );
+
+        setDueSoonSubs(due);
+      } catch (err) {
+        if (!cancelled) console.error('Failed to load subscription reminders', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const overdueCount = useMemo(
+    () => dueSoonSubs.filter(e => (daysUntil(e.next_renewal_date) ?? 0) < 0).length,
+    [dueSoonSubs]
+  );
+  const upcomingCount = dueSoonSubs.length - overdueCount;
+  const bannerLogoSub = dueSoonSubs.find(e => e.image_url) || null;
+  const dueSoonSignature = useMemo(
+    () =>
+      dueSoonSubs
+        .map(e => e.id)
+        .sort()
+        .join(','),
+    [dueSoonSubs]
+  );
+
+  useEffect(() => {
+    if (!dueSoonSignature) {
+      setBannerDismissed(false);
+      return;
+    }
+    try {
+      setBannerDismissed(
+        sessionStorage.getItem('ogo_dash_sub_banner_dismissed') === dueSoonSignature
+      );
+    } catch {
+      setBannerDismissed(false);
+    }
+  }, [dueSoonSignature]);
+
+  const dismissSubBanner = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      if (dueSoonSignature) {
+        sessionStorage.setItem('ogo_dash_sub_banner_dismissed', dueSoonSignature);
+      }
+    } catch {
+      /* ignore */
+    }
+    setBannerDismissed(true);
+  };
 
   // Manual refresh functionality
   const handleRefresh = useCallback(async () => {
@@ -362,6 +468,43 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
     .sort((a, b) => new Date(a.deadlineDate).getTime() - new Date(b.deadlineDate).getTime())
     .slice(0, 3);
 
+  const isAssignedTo = (assignedTo: string | undefined, employeeId: string) => {
+    if (!assignedTo) return false;
+    return assignedTo
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean)
+      .includes(employeeId);
+  };
+
+  const employeePerformanceRows = useMemo(() => {
+    return employees
+      .map(employee => {
+        const empProjects = filteredProjects.filter(p => isAssignedTo(p.assignedTo, employee.id));
+        const totalCount = empProjects.length;
+        const completedCount = empProjects.filter(
+          p => p.status === 'Delivered' || p.status === 'Pending Payment'
+        ).length;
+        return {
+          employee,
+          totalCount,
+          completedCount,
+          isActive: employee.isActive !== false,
+        };
+      })
+      .sort((a, b) => {
+        // Higher project count first, then completed
+        if (b.totalCount !== a.totalCount) return b.totalCount - a.totalCount;
+        if (b.completedCount !== a.completedCount) return b.completedCount - a.completedCount;
+        // Active before inactive
+        if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
+        const nameA = `${a.employee.firstName} ${a.employee.lastName}`.toLowerCase();
+        const nameB = `${b.employee.firstName} ${b.employee.lastName}`.toLowerCase();
+        return nameA.localeCompare(nameB);
+      })
+      .slice(0, 5);
+  }, [employees, filteredProjects]);
+
   useEffect(() => {
     // Remove overflow:hidden to allow scrolling
     document.body.style.overflow = '';
@@ -371,36 +514,33 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
 
   return (
     <div className="space-y-6 sm:space-y-8 animate-fadeIn">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center sm:justify-between gap-4">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between w-full gap-3 sm:gap-0">
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl sm:text-3xl font-bold text-[#F6E9E9] font-['Playfair_Display']">
-              Dashboard Overview
-            </h1>
-            {/* Visibility Toggle Button */}
-            <button
-              onClick={handleToggleVisibility}
-              className={`p-2 rounded-lg transition-all duration-300 ${
-                valuesHidden 
-                  ? 'bg-[#E16428]/20 text-[#E16428] hover:bg-[#E16428]/30' 
-                  : 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30'
-              }`}
-              title={valuesHidden ? 'Show values' : 'Hide values'}
-            >
-              {valuesHidden ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-            </button>
-          </div>
-          <div className="flex flex-row gap-2 w-full sm:w-auto sm:ml-auto">
-            <MonthYearNavigator
-              selectedMonth={selectedMonth}
-              selectedYear={selectedYear}
-              availableYears={availableYears}
-              onChange={(month, year) => {
-                setSelectedMonth(month);
-                setSelectedYear(year);
-              }}
-            />
-          </div>
+      <div className="flex flex-col sm:flex-row items-start sm:items-center sm:justify-between gap-3 sm:gap-4">
+        <h1 className="text-2xl sm:text-3xl font-bold text-[#F6E9E9] font-['Playfair_Display'] shrink-0">
+          Dashboard Overview
+        </h1>
+        <div className="flex items-center gap-2 w-full sm:w-auto sm:ml-auto justify-between sm:justify-end">
+          <MonthYearNavigator
+            selectedMonth={selectedMonth}
+            selectedYear={selectedYear}
+            availableYears={availableYears}
+            onChange={(month, year) => {
+              setSelectedMonth(month);
+              setSelectedYear(year);
+            }}
+          />
+          <button
+            type="button"
+            onClick={handleToggleVisibility}
+            className={`shrink-0 w-9 h-9 aspect-square rounded-lg inline-flex items-center justify-center transition-all duration-300 ${
+              valuesHidden
+                ? 'bg-[#E16428]/20 text-[#E16428] hover:bg-[#E16428]/30'
+                : 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30'
+            }`}
+            title={valuesHidden ? 'Show values' : 'Hide values'}
+            aria-label={valuesHidden ? 'Show values' : 'Hide values'}
+          >
+            {valuesHidden ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          </button>
         </div>
       </div>
 
@@ -478,120 +618,316 @@ export const Dashboard: React.FC<DashboardProps> = ({ projects, employees, onRef
         </GlassCard>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 sm:gap-8">
-        <GlassCard className="p-4 sm:p-6">
-          <h2 className="text-lg sm:text-xl font-semibold text-[#F6E9E9] mb-4 font-['Poppins']">
-            Recent Projects
-          </h2>
-          <div className="space-y-3">
-            {allRecentProjects.map((project) => (
-              <div
-                key={project.id}
-                className="flex flex-col gap-1 p-3 bg-[#232021]/80 rounded-xl border border-[#E16428]/10 hover:border-[#E16428]/30 transition-all duration-300 shadow-sm"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-[#F6E9E9] text-sm truncate max-w-[120px]">{project.clientName}</span>
-                  <span className={`ml-auto px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                    project.status === 'Running'
-                      ? 'bg-blue-500/20 text-blue-300'
-                      : project.status === 'Delivered'
-                      ? 'bg-green-500/20 text-green-300'
-                      : project.status === 'Pending'
-                      ? 'bg-yellow-500/20 text-yellow-300'
-                      : 'bg-red-500/20 text-red-300'
-                  }`}>{project.status}</span>
-                </div>
-                <div className="flex flex-wrap gap-1 mt-1">
-                  {getProjectTypeNames(project.projectDescription).split(', ').map((type, idx) => (
-                    <span key={idx} className="bg-[#E16428]/20 text-[#E16428] rounded-full px-2 py-0.5 text-[10px] font-medium lowercase max-w-[80px] truncate">{type}</span>
-                  ))}
-                </div>
-                <div className="flex items-center gap-2 mt-1">
-                  <span className="text-[#F6E9E9]/60 text-xs truncate max-w-[100px]">{project.clientUniOrg}</span>
-                  <span className="flex items-center gap-1 text-[#F6E9E9]/40 text-[11px] ml-auto">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                    {new Date(project.deadlineDate).toLocaleDateString()}
-                </span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </GlassCard>
-
-        {/* Upcoming Project Deliverables */}
-        <GlassCard className="p-4 sm:p-6">
-          <h2 className="text-lg sm:text-xl font-semibold text-[#F6E9E9] mb-4 font-['Poppins']">
-            Upcoming Project Deliverables
-          </h2>
-          <div className="space-y-3">
-            {allUpcomingProjects.length === 0 ? (
-              <div className="text-[#F6E9E9]/60 text-sm">No upcoming running projects</div>
+      {/* Upcoming / overdue subscription renewals */}
+      {dueSoonSubs.length > 0 && !bannerDismissed && (
+        <button
+          type="button"
+          onClick={onOpenExpenses}
+          className={`w-full text-left rounded-xl border px-3.5 py-2.5 flex items-start sm:items-center gap-3 transition-colors ${
+            overdueCount > 0
+              ? 'border-red-500/30 bg-red-500/10 hover:bg-red-500/15'
+              : 'border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/15'
+          } ${onOpenExpenses ? 'cursor-pointer' : 'cursor-default'}`}
+        >
+          <div className="mt-0.5 sm:mt-0 shrink-0 w-8 h-8 rounded-full overflow-hidden border border-white/10 bg-white flex items-center justify-center shadow-sm">
+            {bannerLogoSub?.image_url ? (
+              <img
+                src={bannerLogoSub.image_url}
+                alt={bannerLogoSub.name}
+                className="w-full h-full object-contain p-0.5"
+              />
             ) : (
-              allUpcomingProjects.map((project) => (
-                <div
-                  key={project.id}
-                  className="flex flex-col gap-1 p-3 bg-[#232021]/80 rounded-xl border border-[#E16428]/10 hover:border-[#E16428]/30 transition-all duration-300 shadow-sm"
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="font-bold text-[#F6E9E9] text-sm truncate max-w-[120px]">{project.clientName}</span>
-                    <span className={`ml-auto px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-500/20 text-blue-300`}>Running</span>
-                  </div>
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {getProjectTypeNames(project.projectDescription).split(', ').map((type, idx) => (
-                      <span key={idx} className="bg-[#E16428]/20 text-[#E16428] rounded-full px-2 py-0.5 text-[10px] font-medium lowercase max-w-[80px] truncate">{type}</span>
-                    ))}
-                  </div>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="text-[#F6E9E9]/60 text-xs truncate max-w-[100px]">{project.clientUniOrg}</span>
-                    <span className="flex items-center gap-1 text-[#F6E9E9]/40 text-[11px] ml-auto">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                      {new Date(project.deadlineDate).toLocaleDateString()}
-                    </span>
-                  </div>
-                </div>
-              ))
+              <div
+                className={`w-full h-full flex items-center justify-center ${
+                  overdueCount > 0 ? 'bg-red-500/20' : 'bg-amber-500/20'
+                }`}
+              >
+                <Bell
+                  className={`w-4 h-4 ${overdueCount > 0 ? 'text-red-400' : 'text-amber-300'}`}
+                />
+              </div>
             )}
           </div>
-        </GlassCard>
+          <div className="min-w-0 flex-1">
+            <p
+              className={`text-sm font-medium font-['Inter'] ${
+                overdueCount > 0 ? 'text-red-300' : 'text-amber-300'
+              }`}
+            >
+              {overdueCount > 0 && upcomingCount > 0
+                ? `${overdueCount} overdue · ${upcomingCount} renewing soon`
+                : overdueCount > 0
+                  ? `${overdueCount} subscription${overdueCount > 1 ? 's' : ''} overdue`
+                  : `${upcomingCount} subscription${upcomingCount > 1 ? 's' : ''} renewing soon`}
+            </p>
+            <p className="mt-0.5 text-xs text-[#F6E9E9]/60 font-['Inter'] truncate">
+              {dueSoonSubs
+                .slice(0, 3)
+                .map(e => {
+                  const days = daysUntil(e.next_renewal_date);
+                  const label =
+                    days !== null && days < 0
+                      ? `${Math.abs(days)}d overdue`
+                      : days === 0
+                        ? 'today'
+                        : days === 1
+                          ? 'tomorrow'
+                          : `${days}d`;
+                  return `${e.name} (${label})`;
+                })
+                .join(' · ')}
+              {dueSoonSubs.length > 3 ? ` · +${dueSoonSubs.length - 3} more` : ''}
+            </p>
+          </div>
+          <div className="shrink-0 self-center flex items-center gap-1.5">
+            {onOpenExpenses && (
+              <span
+                className={`text-xs font-['Inter'] ${
+                  overdueCount > 0 ? 'text-red-400/80' : 'text-amber-300/80'
+                }`}
+              >
+                View
+              </span>
+            )}
+            <span
+              role="button"
+              tabIndex={0}
+              aria-label="Dismiss reminder"
+              title="Dismiss for now"
+              onClick={dismissSubBanner}
+              onKeyDown={e => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  dismissSubBanner(e as unknown as React.MouseEvent);
+                }
+              }}
+              className={`inline-flex items-center justify-center w-7 h-7 rounded-full transition-colors ${
+                overdueCount > 0
+                  ? 'text-red-300/70 hover:text-red-200 hover:bg-red-500/20'
+                  : 'text-amber-300/70 hover:text-amber-200 hover:bg-amber-500/20'
+              }`}
+            >
+              <X className="w-3.5 h-3.5" />
+            </span>
+          </div>
+        </button>
+      )}
 
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-5">
+        <div className="p-3.5 sm:p-4 rounded-xl bg-[#272121]/40 backdrop-blur-md">
+          <div className="flex items-baseline justify-between gap-2 mb-3">
+            <h2 className="text-sm sm:text-base font-semibold text-[#F6E9E9] font-['Poppins'] tracking-tight">
+              Recent Projects
+            </h2>
+            <span className="text-[10px] uppercase tracking-[0.14em] text-[#F6E9E9]/30 font-['Inter']">
+              {allRecentProjects.length}
+            </span>
+          </div>
+          <div className="space-y-0.5">
+            {allRecentProjects.length === 0 ? (
+              <p className="py-4 text-xs text-[#F6E9E9]/35 font-['Inter'] text-center">
+                No recent projects
+              </p>
+            ) : (
+              allRecentProjects.map(project => {
+                const typeLabel = getProjectTypeNames(project.projectDescription)
+                  .split(', ')
+                  .filter(Boolean)[0];
+                const d = new Date(project.deadlineDate);
+                const statusTone =
+                  project.status === 'Running'
+                    ? 'text-sky-300'
+                    : project.status === 'Delivered'
+                      ? 'text-emerald-300'
+                      : project.status === 'Pending' || project.status === 'Pending Payment'
+                        ? 'text-amber-300'
+                        : 'text-red-300';
+                return (
+                  <div
+                    key={project.id}
+                    className="grid grid-cols-[2.65rem_minmax(0,1fr)_auto] gap-3 items-center py-2.5 px-1.5 -mx-1.5 rounded-lg hover:bg-white/[0.03] transition-colors duration-200"
+                  >
+                    <div className="flex flex-col items-center justify-center pb-1 border-b border-[#E16428]/45">
+                      <span className="text-[13px] font-bold leading-none text-[#F6E9E9] font-['Poppins'] tabular-nums">
+                        {d.getDate()}
+                      </span>
+                      <span className="mt-0.5 text-[9px] font-medium uppercase tracking-[0.12em] text-[#E16428] font-['Inter']">
+                        {d.toLocaleDateString(undefined, { month: 'short' })}
+                      </span>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[13px] font-medium text-[#F6E9E9] font-['Inter'] truncate leading-snug">
+                        {project.clientName}
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-[#F6E9E9]/40 font-['Inter'] truncate leading-snug">
+                        {typeLabel && (
+                          <span className="text-[#E16428]/85 lowercase">{typeLabel}</span>
+                        )}
+                        {typeLabel && project.clientUniOrg ? (
+                          <span className="mx-1.5 text-[#F6E9E9]/20">·</span>
+                        ) : null}
+                        {project.clientUniOrg || (!typeLabel ? '—' : '')}
+                      </p>
+                    </div>
+                    <span
+                      className={`shrink-0 text-[10px] font-medium tracking-wide font-['Inter'] ${statusTone}`}
+                    >
+                      {project.status}
+                    </span>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+
+        <div className="p-3.5 sm:p-4 rounded-xl bg-[#272121]/40 backdrop-blur-md">
+          <div className="flex items-baseline justify-between gap-2 mb-3">
+            <h2 className="text-sm sm:text-base font-semibold text-[#F6E9E9] font-['Poppins'] tracking-tight">
+              Upcoming Deliverables
+            </h2>
+            <span className="text-[10px] uppercase tracking-[0.14em] text-[#F6E9E9]/30 font-['Inter']">
+              {allUpcomingProjects.length}
+            </span>
+          </div>
+          <div className="space-y-0.5">
+            {allUpcomingProjects.length === 0 ? (
+              <p className="py-4 text-xs text-[#F6E9E9]/35 font-['Inter'] text-center">
+                No upcoming running projects
+              </p>
+            ) : (
+              allUpcomingProjects.map(project => {
+                const typeLabel = getProjectTypeNames(project.projectDescription)
+                  .split(', ')
+                  .filter(Boolean)[0];
+                const d = new Date(project.deadlineDate);
+                const today = new Date();
+                today.setHours(12, 0, 0, 0);
+                d.setHours(12, 0, 0, 0);
+                const daysLeft = Math.round(
+                  (d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)
+                );
+                const dueLabel =
+                  daysLeft < 0
+                    ? `${Math.abs(daysLeft)}d late`
+                    : daysLeft === 0
+                      ? 'Today'
+                      : daysLeft === 1
+                        ? 'Tomorrow'
+                        : `${daysLeft}d left`;
+                const dueTone =
+                  daysLeft < 0
+                    ? 'text-red-300'
+                    : daysLeft <= 3
+                      ? 'text-amber-300'
+                      : 'text-[#F6E9E9]/45';
+                const monthTone =
+                  daysLeft < 0
+                    ? 'text-red-300'
+                    : daysLeft <= 3
+                      ? 'text-amber-300'
+                      : 'text-[#E16428]';
+                const lineTone =
+                  daysLeft < 0
+                    ? 'border-red-400/50'
+                    : daysLeft <= 3
+                      ? 'border-amber-400/50'
+                      : 'border-[#E16428]/45';
+                return (
+                  <div
+                    key={project.id}
+                    className="grid grid-cols-[2.65rem_minmax(0,1fr)_auto] gap-3 items-center py-2.5 px-1.5 -mx-1.5 rounded-lg hover:bg-white/[0.03] transition-colors duration-200"
+                  >
+                    <div className={`flex flex-col items-center justify-center pb-1 border-b ${lineTone}`}>
+                      <span className="text-[13px] font-bold leading-none text-[#F6E9E9] font-['Poppins'] tabular-nums">
+                        {d.getDate()}
+                      </span>
+                      <span
+                        className={`mt-0.5 text-[9px] font-medium uppercase tracking-[0.12em] font-['Inter'] ${monthTone}`}
+                      >
+                        {d.toLocaleDateString(undefined, { month: 'short' })}
+                      </span>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[13px] font-medium text-[#F6E9E9] font-['Inter'] truncate leading-snug">
+                        {project.clientName}
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-[#F6E9E9]/40 font-['Inter'] truncate leading-snug">
+                        {typeLabel && (
+                          <span className="text-[#E16428]/85 lowercase">{typeLabel}</span>
+                        )}
+                        {typeLabel && project.clientUniOrg ? (
+                          <span className="mx-1.5 text-[#F6E9E9]/20">·</span>
+                        ) : null}
+                        {project.clientUniOrg || (!typeLabel ? '—' : '')}
+                      </p>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className={`text-[10px] font-semibold font-['Inter'] tabular-nums ${dueTone}`}>
+                        {dueLabel}
+                      </p>
+                      <p className="mt-0.5 text-[9px] text-sky-300/70 font-['Inter']">Running</p>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Employee Performance */}
-      <GlassCard className="p-4 sm:p-6">
-        <h2 className="text-lg sm:text-xl font-semibold text-[#F6E9E9] mb-4 font-['Poppins']">
-          Employee Performance
-        </h2>
-        <div className="space-y-3">
-          {employees.slice(0, 5).map((employee) => {
-            const filteredEmployeeProjects = filteredProjects.filter(p => p.assignedTo === employee.id);
-            const completedCount = filteredEmployeeProjects.filter(p => p.status === 'Delivered' || p.status === 'Pending Payment').length;
-            
-            return (
+      <div className="p-3.5 sm:p-4 rounded-xl bg-[#272121]/40 backdrop-blur-md">
+        <div className="flex items-baseline justify-between gap-2 mb-3">
+          <h2 className="text-sm sm:text-base font-semibold text-[#F6E9E9] font-['Poppins'] tracking-tight">
+            Employee Performance
+          </h2>
+          <span className="text-[10px] uppercase tracking-[0.14em] text-[#F6E9E9]/30 font-['Inter']">
+            {employeePerformanceRows.length}
+          </span>
+        </div>
+        <div className="space-y-0.5">
+          {employeePerformanceRows.length === 0 ? (
+            <p className="py-4 text-xs text-[#F6E9E9]/35 font-['Inter'] text-center">No employees</p>
+          ) : (
+            employeePerformanceRows.map(row => (
               <div
-                key={employee.id}
-                className="flex items-center justify-between p-3 bg-[#272121]/30 rounded-lg border border-[#E16428]/10"
+                key={row.employee.id}
+                className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 items-center py-2 px-1.5 -mx-1.5 rounded-lg hover:bg-white/[0.03] transition-colors duration-200"
               >
-                <div className="flex-1 min-w-0">
-                  <p className="text-[#F6E9E9] font-medium font-['Inter'] truncate">
-                    {employee.firstName} {employee.lastName}
+                <div className="min-w-0">
+                  <p className="text-[13px] font-medium text-[#F6E9E9] font-['Inter'] truncate leading-snug">
+                    {row.employee.firstName} {row.employee.lastName}
                   </p>
-                  <p className="text-[#F6E9E9]/70 text-sm truncate">
-                    {employee.position}
+                  <p className="mt-0.5 text-[11px] text-[#F6E9E9]/40 font-['Inter'] truncate leading-snug">
+                    <span
+                      className={
+                        row.isActive ? 'text-emerald-300/85' : 'text-[#F6E9E9]/30'
+                      }
+                    >
+                      {row.isActive ? 'Active' : 'Inactive'}
+                    </span>
+                    {row.employee.position ? (
+                      <>
+                        <span className="mx-1.5 text-[#F6E9E9]/20">·</span>
+                        {row.employee.position}
+                      </>
+                    ) : null}
                   </p>
                 </div>
-                <div className="text-right flex-shrink-0 ml-2">
-                  <p className="text-[#E16428] font-bold text-sm">
-                    {completedCount} completed
+                <div className="shrink-0 text-right tabular-nums">
+                  <p className="text-[13px] font-semibold text-[#E16428] font-['Poppins'] leading-none">
+                    {row.completedCount}
+                    <span className="text-[10px] font-normal text-[#F6E9E9]/30">/{row.totalCount}</span>
                   </p>
-                  <p className="text-[#F6E9E9]/70 text-xs">
-                    {filteredEmployeeProjects.length} total
+                  <p className="mt-0.5 text-[9px] uppercase tracking-[0.1em] text-[#F6E9E9]/30 font-['Inter']">
+                    done
                   </p>
                 </div>
               </div>
-            );
-          })}
+            ))
+          )}
         </div>
-      </GlassCard>
+      </div>
 
       {/* Password / PIN Verification Modal */}
       {showPasswordModal && ReactDOM.createPortal(

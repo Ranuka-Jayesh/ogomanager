@@ -33,8 +33,6 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({
   onEdit,
 }) => {
   const isActive = employee.isActive !== false;
-  const isRanuka =
-    `${employee.firstName} ${employee.lastName}`.toLowerCase() === 'ranuka jayesh';
   const age = getAge(employee.birthday);
 
   const stats = useMemo(() => {
@@ -65,13 +63,6 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({
       }
     });
 
-    const profit = employeeProjects.reduce((sum, p) => {
-      const cost = p.employeePayments?.length
-        ? p.employeePayments.reduce((s, ep) => s + Math.abs(ep.amount ?? ep.payment ?? 0), 0)
-        : Math.abs(p.paymentOfEmp || 0);
-      return sum + (p.price - cost);
-    }, 0);
-
     const completed = employeeProjects.filter(p => p.status === 'Delivered').length;
     const running = employeeProjects.filter(p => p.status === 'Running').length;
 
@@ -84,7 +75,6 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({
       running,
       totalPay,
       pendingPay,
-      profit,
       completionRate:
         employeeProjects.length > 0
           ? (completed / employeeProjects.length) * 100
@@ -209,16 +199,14 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({
           { label: 'Projects', value: String(stats.total) },
           { label: 'Completed', value: String(stats.completed) },
           {
-            label: isRanuka ? 'Profit' : 'Pay',
-            value: isRanuka
-              ? `LKR ${stats.profit.toLocaleString()}`
-              : (
-                  <span className="inline-flex items-baseline gap-1 flex-wrap">
-                    <span className="text-yellow-400">LKR {stats.pendingPay.toLocaleString()}</span>
-                    <span className="text-[#F6E9E9]/35 font-normal text-sm">/</span>
-                    <span>LKR {stats.totalPay.toLocaleString()}</span>
-                  </span>
-                ),
+            label: 'Pay',
+            value: (
+              <span className="inline-flex items-baseline gap-1 flex-wrap">
+                <span className="text-yellow-400">LKR {stats.pendingPay.toLocaleString()}</span>
+                <span className="text-[#F6E9E9]/35 font-normal text-sm">/</span>
+                <span>LKR {stats.totalPay.toLocaleString()}</span>
+              </span>
+            ),
           },
           { label: 'Success', value: `${stats.completionRate.toFixed(0)}%` },
         ].map(kpi => (
@@ -287,15 +275,13 @@ export const EmployeeDetail: React.FC<EmployeeDetailProps> = ({
                     </p>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
-                    {!isRanuka && (
-                      <span
-                        className={`text-xs font-medium font-['Inter'] ${
-                          payPending ? 'text-yellow-400' : 'text-green-400/80'
-                        }`}
-                      >
-                        LKR {pay.toLocaleString()}
-                      </span>
-                    )}
+                    <span
+                      className={`text-xs font-medium font-['Inter'] ${
+                        payPending ? 'text-yellow-400' : 'text-green-400/80'
+                      }`}
+                    >
+                      LKR {pay.toLocaleString()}
+                    </span>
                     <span
                       className={`text-[10px] px-2 py-0.5 rounded-full font-['Inter'] ${statusColor(
                         project.status

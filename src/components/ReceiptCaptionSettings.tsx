@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Bold,
   Italic,
@@ -107,10 +108,16 @@ export const ReceiptCaptionSettings: React.FC = () => {
     ) as Record<ReceiptCaptionStatus, string>;
     return empty;
   });
+  const [savedCaptions, setSavedCaptions] = useState<Record<ReceiptCaptionStatus, string>>(captions);
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
   const template = captions[activeStatus] ?? DEFAULT_RECEIPT_CAPTION;
+
+  const isDirty = useMemo(
+    () => RECEIPT_CAPTION_STATUSES.some(s => (captions[s] ?? '') !== (savedCaptions[s] ?? '')),
+    [captions, savedCaptions]
+  );
 
   const rememberCaret = () => {
     const el = textareaRef.current;
@@ -119,7 +126,9 @@ export const ReceiptCaptionSettings: React.FC = () => {
   };
 
   useEffect(() => {
-    setCaptions(getSavedReceiptCaptions());
+    const loaded = getSavedReceiptCaptions();
+    setCaptions(loaded);
+    setSavedCaptions(loaded);
   }, []);
 
   const preview = useMemo(
@@ -184,6 +193,7 @@ export const ReceiptCaptionSettings: React.FC = () => {
         return;
       }
       saveReceiptCaptionForStatus(activeStatus, template);
+      setSavedCaptions(prev => ({ ...prev, [activeStatus]: template }));
       setMsg({ type: 'success', text: `Saved for ${activeStatus}.` });
       setTimeout(() => setMsg(null), 3000);
     } catch {
@@ -194,6 +204,7 @@ export const ReceiptCaptionSettings: React.FC = () => {
   const onReset = () => {
     clearReceiptCaptionForStatus(activeStatus);
     setCaptions(prev => ({ ...prev, [activeStatus]: DEFAULT_RECEIPT_CAPTION }));
+    setSavedCaptions(prev => ({ ...prev, [activeStatus]: DEFAULT_RECEIPT_CAPTION }));
     setMsg({ type: 'success', text: `Reset ${activeStatus} to default.` });
     setTimeout(() => setMsg(null), 2500);
   };
@@ -364,34 +375,16 @@ export const ReceiptCaptionSettings: React.FC = () => {
             </div>
           </div>
 
-          {/* Actions */}
-          <div className="flex items-center gap-3 pt-1">
-            <button
-              type="button"
-              onClick={onSave}
-              className="inline-flex items-center justify-center gap-2 h-10 px-1 border-0 border-b-2 border-[#E16428] rounded-none bg-transparent text-[#E16428] text-sm font-medium hover:text-[#f07a42] hover:border-[#f07a42] transition-colors"
+          {/* Status message */}
+          {msg && (
+            <p
+              className={`text-xs font-['Inter'] pt-1 ${
+                msg.type === 'success' ? 'text-emerald-400' : 'text-red-400'
+              }`}
             >
-              <Save className="w-3.5 h-3.5" />
-              Save
-            </button>
-            <button
-              type="button"
-              onClick={onReset}
-              className="inline-flex items-center justify-center gap-1.5 h-10 px-1 border-0 border-b-2 border-transparent rounded-none bg-transparent text-sm text-[#F6E9E9]/45 hover:text-[#E16428] hover:border-[#E16428]/40 transition-colors"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              Reset
-            </button>
-            {msg && (
-              <span
-                className={`ml-auto text-xs font-['Inter'] ${
-                  msg.type === 'success' ? 'text-emerald-400' : 'text-red-400'
-                }`}
-              >
-                {msg.text}
-              </span>
-            )}
-          </div>
+              {msg.text}
+            </p>
+          )}
         </div>
 
         {/* Status panel — right on desktop */}
@@ -433,6 +426,34 @@ export const ReceiptCaptionSettings: React.FC = () => {
           </div>
         </aside>
       </div>
+
+      {isDirty &&
+        createPortal(
+          <div className="fixed bottom-5 sm:bottom-7 inset-x-0 z-40 flex justify-center pointer-events-none px-3">
+            <div className="pointer-events-auto flex items-center rounded-full bg-[#272121]/95 backdrop-blur-md border border-[#E16428]/25 shadow-xl shadow-black/40 pl-3.5 pr-1.5 py-1 gap-0.5 animate-fadeIn">
+              <button
+                type="button"
+                onClick={onSave}
+                className="px-2.5 sm:px-3 py-1.5 text-[#F6E9E9] text-sm font-['Poppins'] font-semibold hover:text-[#E16428] active:scale-95 transition-all"
+              >
+                Save
+              </button>
+              <span className="w-px h-4 bg-[#F6E9E9]/15 shrink-0" aria-hidden />
+              <button
+                type="button"
+                onClick={onReset}
+                className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-[#F6E9E9] text-sm font-['Poppins'] font-semibold hover:text-[#E16428] active:scale-95 transition-all"
+              >
+                <RotateCcw className="w-3.5 h-3.5 opacity-70" />
+                Reset
+              </button>
+              <div className="ml-1.5 shrink-0 w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-[#E16428] border-2 border-[#E16428]/80 flex items-center justify-center shadow-md">
+                <Save className="w-4 h-4 text-white" strokeWidth={2.5} />
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
     </section>
   );
 };

@@ -33,6 +33,7 @@ const mapEmployeeFromDB = (employee: any): Employee => ({
   emailAddress: employee.emailAddress ?? employee.email ?? '',
   qualifications: employee.qualifications ?? '',
   isActive: employee.isActive ?? employee.is_active ?? true,
+  showInPerformance: employee.showInPerformance ?? employee.show_in_performance ?? true,
   createdAt: employee.createdAt ?? employee.created_at,
 });
 
@@ -48,6 +49,7 @@ const mapEmployeeToDB = (employee: Omit<Employee, 'id'>) => ({
   email: employee.emailAddress,
   qualifications: employee.qualifications,
   is_active: employee.isActive !== false,
+  show_in_performance: employee.showInPerformance !== false,
 });
 
 export interface UseEmployeesOfflineReturn {
@@ -218,6 +220,9 @@ export const useEmployeesOffline = (): UseEmployeesOfflineReturn => {
       if (updates.emailAddress !== undefined) updateData.email = updates.emailAddress;
       if (updates.qualifications !== undefined) updateData.qualifications = updates.qualifications;
       if (updates.isActive !== undefined) updateData.is_active = updates.isActive;
+      if (updates.showInPerformance !== undefined) {
+        updateData.show_in_performance = updates.showInPerformance;
+      }
 
       // Optimistically update state
       const updatedEmployee = { ...currentEmployee, ...updates };

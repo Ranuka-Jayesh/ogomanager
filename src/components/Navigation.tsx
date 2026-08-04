@@ -4,6 +4,7 @@ import {
   FolderOpen,
   CalendarDays,
   Users,
+  Wallet,
   BarChart3,
   Settings,
   X,
@@ -28,8 +29,9 @@ const navItems = [
   { id: 'projects', label: 'Projects', icon: FolderOpen, shortcut: 'Alt+2', key: '2' },
   { id: 'calendar', label: 'Calendar', icon: CalendarDays, shortcut: 'Alt+3', key: '3' },
   { id: 'employees', label: 'Employees', icon: Users, shortcut: 'Alt+4', key: '4' },
-  { id: 'analytics', label: 'Analytics', icon: BarChart3, shortcut: 'Alt+5', key: '5' },
-  { id: 'settings', label: 'Settings', icon: Settings, shortcut: 'Alt+6', key: '6' },
+  { id: 'expenses', label: 'Expenses', icon: Wallet, shortcut: 'Alt+5', key: '5' },
+  { id: 'analytics', label: 'Analytics', icon: BarChart3, shortcut: 'Alt+6', key: '6' },
+  { id: 'settings', label: 'Settings', icon: Settings, shortcut: 'Alt+7', key: '7' },
 ] as const;
 
 export const Navigation: React.FC<NavigationProps> = ({
@@ -54,7 +56,7 @@ export const Navigation: React.FC<NavigationProps> = ({
         return;
       }
 
-      if (event.altKey && /^[1-6]$/.test(event.key)) {
+      if (event.altKey && /^[1-7]$/.test(event.key)) {
         event.preventDefault();
         const tabIndex = parseInt(event.key, 10) - 1;
         if (navItems[tabIndex]) {

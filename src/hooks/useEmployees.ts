@@ -20,6 +20,7 @@ export const useEmployees = () => {
     emailAddress: employee.email,
     qualifications: employee.qualifications,
     isActive: employee.is_active ?? true,
+    showInPerformance: employee.show_in_performance ?? true,
     createdAt: employee.created_at,
   });
 
@@ -35,6 +36,7 @@ export const useEmployees = () => {
     email: employee.emailAddress,
     qualifications: employee.qualifications,
     is_active: employee.isActive !== false,
+    show_in_performance: employee.showInPerformance !== false,
   });
 
   // Fetch all employees from database
@@ -109,6 +111,9 @@ export const useEmployees = () => {
       if (updates.emailAddress !== undefined) updateData.email = updates.emailAddress;
       if (updates.qualifications !== undefined) updateData.qualifications = updates.qualifications;
       if (updates.isActive !== undefined) updateData.is_active = updates.isActive;
+      if (updates.showInPerformance !== undefined) {
+        updateData.show_in_performance = updates.showInPerformance;
+      }
 
       const { data, error: updateError } = await supabase
         .from('employees')

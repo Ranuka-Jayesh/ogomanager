@@ -58,8 +58,6 @@ interface MonthlyData {
 }
 
 export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, projects, employees, month, year, monthlyChartData, chartPeriod = 'daily', dailyChartData }) => {
-  const reportRef = useRef<HTMLDivElement>(null);
-  const [, setProjectTypes] = React.useState<{ id: string; name: string }[]>([]);
   const now = new Date();
   const monthName = month === 'all' ? 'All Months' : new Date(0, month as number).toLocaleString('default', { month: 'long' });
   const yearName = year === 'all' ? 'All Years' : year;
@@ -72,13 +70,16 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
   const uniqueClientsChartRef = useRef<HTMLCanvasElement>(null);
   const chartInstancesRef = useRef<{ revenue?: Chart; profit?: Chart; employeePayments?: Chart; projectTrends?: Chart; uniqueClients?: Chart }>({});
 
-  // Authentication state
+  // Authentication / generation state
   const [showAuthModal, setShowAuthModal] = React.useState(false);
   const [adminPassword, setAdminPassword] = React.useState('');
   const [authError, setAuthError] = React.useState('');
   const [isAuthenticating, setIsAuthenticating] = React.useState(false);
   const [pinEnabled, setPinEnabled] = React.useState(false);
   const [pinInput, setPinInput] = React.useState('');
+  const [isGenerating, setIsGenerating] = React.useState(false);
+  const [periodExpenses, setPeriodExpenses] = React.useState(0);
+  const authStartedRef = useRef(false);
 
   const getSessionEmail = (): string | null => {
     try {
@@ -93,19 +94,24 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
     return getLastLoginEmail();
   };
 
-  const closeAuthModal = () => {
+  const closeAuthModal = (cancel = true) => {
     setShowAuthModal(false);
     setAdminPassword('');
     setPinInput('');
     setAuthError('');
+    if (cancel && !isGenerating) {
+      authStartedRef.current = false;
+      onClose();
+    }
   };
 
   // ESC key handler to close modals
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        if (isGenerating) return;
         if (showAuthModal) {
-          closeAuthModal();
+          closeAuthModal(true);
         } else if (open) {
           onClose();
         }
@@ -114,14 +120,73 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [showAuthModal, open, onClose]);
+  }, [showAuthModal, open, onClose, isGenerating]);
+
+  // Load expenses for selected period
+  React.useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('expenses')
+          .select('amount, type, expense_date, next_renewal_date, start_date, created_at');
+        if (error || !data || cancelled) {
+          if (!cancelled) setPeriodExpenses(0);
+          return;
+        }
+        let total = 0;
+        data.forEach((row: any) => {
+          const iso =
+            row.type === 'subscription'
+              ? row.next_renewal_date || row.start_date || row.created_at?.slice?.(0, 10)
+              : row.expense_date || row.created_at?.slice?.(0, 10);
+          if (!iso) return;
+          const d = new Date(String(iso).slice(0, 10) + 'T12:00:00');
+          const monthOk = month === 'all' || d.getMonth() === month;
+          const yearOk = year === 'all' || d.getFullYear() === year;
+          if (monthOk && yearOk) total += Number(row.amount) || 0;
+        });
+        if (!cancelled) setPeriodExpenses(total);
+      } catch {
+        if (!cancelled) setPeriodExpenses(0);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, month, year]);
+
+  // Auto-start auth when report is requested (no preview)
+  React.useEffect(() => {
+    if (!open) {
+      authStartedRef.current = false;
+      setIsGenerating(false);
+      return;
+    }
+    if (authStartedRef.current) return;
+    authStartedRef.current = true;
+    void (async () => {
+      setShowAuthModal(true);
+      setAdminPassword('');
+      setPinInput('');
+      setAuthError('');
+      const email = getSessionEmail();
+      if (email) {
+        const prefs = await loadAdminSecurity(email);
+        setPinEnabled(prefs.pinEnabled);
+      } else {
+        setPinEnabled(false);
+      }
+    })();
+  }, [open]);
 
   // Enhanced analytics calculations (due = cost; paid/pending for payment status)
   const totalRevenue = projects.reduce((sum, p) => sum + p.price, 0);
   const totalEmployeePayments = projects.reduce((sum, p) => sum + getProjectEmployeePaymentsDue(p), 0);
   const totalPaidEmployeePayments = projects.reduce((sum, p) => sum + getProjectEmployeePaymentsPaid(p), 0);
   const totalPendingEmployeePayments = projects.reduce((sum, p) => sum + getProjectEmployeePaymentsPending(p), 0);
-  const profit = totalRevenue - totalEmployeePayments;
+  const profit = totalRevenue - totalEmployeePayments - periodExpenses;
   const profitMargin = totalRevenue > 0 ? (profit / totalRevenue) * 100 : 0;
   const totalProjects = projects.length;
   const completedProjects = projects.filter(p => p.status === 'Delivered').length;
@@ -190,7 +255,6 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
     const revenue = empProjects.reduce((sum, p) => sum + p.price, 0);
     const profit = empProjects.reduce((sum, p) => sum + (p.price - getProjectEmployeePaymentsDue(p)), 0);
     const completed = empProjects.filter(p => p.status === 'Delivered').length;
-    const isRanukaJayesh = `${emp.firstName} ${emp.lastName}`.toLowerCase() === 'ranuka jayesh';
     return {
       ...emp,
       totalEarnings,
@@ -198,7 +262,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
       pendingEarnings,
       revenue,
       profit,
-      displayValue: isRanukaJayesh ? profit : totalEarnings,
+      displayValue: totalEarnings,
       projectCount: empProjects.length,
       completedProjects: completed,
       completionRate: empProjects.length > 0 ? (completed / empProjects.length) * 100 : 0,
@@ -290,6 +354,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
           revenue: 0,
           profit: 0,
           employeePayments: 0,
+          expenses: 0,
           uniqueClients: 0,
         };
       }
@@ -302,18 +367,39 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
         const price = typeof p.price === 'number' ? p.price : parseFloat(p.price || '0');
         const pay = typeof p.payment_of_emp === 'number' ? p.payment_of_emp : parseFloat(p.payment_of_emp || '0');
         revenue += isNaN(price) ? 0 : price;
-        employeePayments += isNaN(pay) ? 0 : pay;
+        employeePayments += isNaN(pay) ? 0 : Math.abs(pay);
         if (p.client_name) {
           clients.add(p.client_name);
         }
       });
 
-      const profitValue = revenue - employeePayments;
+      // Business expenses attributed to this month (expense_date / next_renewal / start_date)
+      let expensesTotal = 0;
+      const { data: expenseRows, error: expenseError } = await supabase
+        .from('expenses')
+        .select('amount, type, expense_date, next_renewal_date, start_date, created_at');
+
+      if (!expenseError && expenseRows) {
+        expenseRows.forEach((row: any) => {
+          const iso =
+            row.type === 'subscription'
+              ? row.next_renewal_date || row.start_date || row.created_at?.slice?.(0, 10)
+              : row.expense_date || row.created_at?.slice?.(0, 10);
+          if (!iso) return;
+          const d = new Date(String(iso).slice(0, 10) + 'T12:00:00');
+          if (d.getFullYear() === targetYear && d.getMonth() + 1 === targetMonth) {
+            expensesTotal += Number(row.amount) || 0;
+          }
+        });
+      }
+
+      const profitValue = revenue - employeePayments - expensesTotal;
 
       return {
         revenue,
         profit: profitValue,
         employeePayments,
+        expenses: expensesTotal,
         uniqueClients: clients.size,
       };
     } catch (err) {
@@ -322,6 +408,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
         revenue: 0,
         profit: 0,
         employeePayments: 0,
+        expenses: 0,
         uniqueClients: 0,
       };
     }
@@ -354,6 +441,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
       const revenueChange = calcChange(currentKpis.revenue, prevKpis.revenue);
       const profitChange = calcChange(currentKpis.profit, prevKpis.profit);
       const employeePaymentsChange = calcChange(currentKpis.employeePayments, prevKpis.employeePayments);
+      const expensesChange = calcChange(currentKpis.expenses, prevKpis.expenses);
       const uniqueClientsChange = calcChange(currentKpis.uniqueClients, prevKpis.uniqueClients);
 
       const currentMargin = currentKpis.revenue > 0 ? (currentKpis.profit / currentKpis.revenue) * 100 : 0;
@@ -369,6 +457,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
           profit_change_percentage: profitChange,
           profit_margin_change_percentage: profitMarginChange,
           employee_payments_change_percentage: employeePaymentsChange,
+          expenses_change_percentage: expensesChange,
           unique_clients_change_percentage: uniqueClientsChange,
         },
         {
@@ -449,9 +538,11 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
     const isAuthenticated = await authenticateAdmin(adminPassword);
     
     if (isAuthenticated) {
-      closeAuthModal();
-      // Proceed with export
-      handleExport();
+      setShowAuthModal(false);
+      setAdminPassword('');
+      setPinInput('');
+      setAuthError('');
+      void handleExport();
     }
   };
 
@@ -483,8 +574,11 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
       if (admin) {
         await logAction(admin.id, admin.email, 'export_auth_success');
       }
-      closeAuthModal();
-      handleExport();
+      setShowAuthModal(false);
+      setAdminPassword('');
+      setPinInput('');
+      setAuthError('');
+      void handleExport();
     } catch {
       await logAction(null, 'Unknown', 'export_auth_error');
       setAuthError('Authentication failed. Please try again.');
@@ -505,581 +599,509 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
     }
   };
 
-  // Enhanced PDF export with comprehensive data and charts
+  // Direct well-formatted PDF export for selected period
   const handleExport = async () => {
-    if (!reportRef.current) return;
-    
-    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    const margin = 20;
-    let yPosition = margin;
-    
-    // Header Section with Logo and Company Details
-    const headerY = yPosition;
-    
-    // Add OGO logo (left side - smaller size)
-    const logoImg = new Image();
-    logoImg.src = '/Logo.jpg';
-    await new Promise(resolve => { logoImg.onload = resolve; });
-    pdf.addImage(logoImg, 'JPEG', margin, headerY, 15, 15);
-    
-    // Company info (right side - small font)
-    pdf.setFont('helvetica', 'bold');
-    pdf.setFontSize(9);
-    pdf.setTextColor(30, 30, 30);
-    const infoX = pageWidth - margin;
-    let infoY = headerY + 2;
-    pdf.text('OGO TECHNOLOGY', infoX, infoY, { align: 'right' });
-    
-    pdf.setFont('helvetica', 'normal');
-    pdf.setFontSize(7);
-    infoY += 4;
-    pdf.text('Department of Academic Services', infoX, infoY, { align: 'right' });
-    infoY += 3;
-    pdf.text('Galle, Sri Lanka', infoX, infoY, { align: 'right' });
-    infoY += 3;
-    pdf.text('+94 75 930 7059', infoX, infoY, { align: 'right' });
-    infoY += 3;
-    pdf.text('info@ogotechnology.com', infoX, infoY, { align: 'right' });
-    
-    // Add line separator
-    yPosition = headerY + 20;
-    pdf.setDrawColor(200, 200, 200);
-    pdf.setLineWidth(0.5);
-    pdf.line(margin, yPosition, pageWidth - margin, yPosition);
-    
-    // Add spacing after line
-    yPosition += 8;
-    
-    // Report title (centered with proper spacing)
-    pdf.setFont('helvetica', 'bold');
-    pdf.setFontSize(16);
-    pdf.setTextColor(30, 30, 30);
-    let reportTitle = '';
-    if (month !== 'all' && year !== 'all') {
-      reportTitle = `Analytics Report - ${monthName} ${yearName}`;
-    } else if (month === 'all' && year !== 'all') {
-      reportTitle = `Annual Analytics Report - ${yearName}`;
-    } else if (month === 'all' && year === 'all') {
-      reportTitle = 'Comprehensive Analytics Report - All Time';
-    } else {
-      reportTitle = 'Analytics Report';
-    }
-    
-    // Center the title manually
-    const titleWidth = pdf.getTextWidth(reportTitle);
-    const titleX = (pageWidth - titleWidth) / 2;
-    pdf.text(reportTitle, titleX, yPosition);
-    yPosition += 10;
-    
-    // Report metadata
-    pdf.setFont('helvetica', 'normal');
-    pdf.setFontSize(11);
-    pdf.setTextColor(80, 80, 80);
-    const generatedDate = now.toLocaleDateString('en-GB');
-    const generatedTime = now.toLocaleTimeString('en-GB', { hour12: false });
-    pdf.text(`Report Period: ${monthName} ${yearName} ~ Generated: ${generatedDate} at ${generatedTime}`, pageWidth / 2, yPosition, { align: 'center' });
-    yPosition += 15;
-    
-    // Executive Summary Table
-    pdf.setFont('helvetica', 'bold');
-    pdf.setFontSize(14);
-    pdf.setTextColor(30, 30, 30);
-    pdf.text('EXECUTIVE SUMMARY', margin, yPosition);
-    yPosition += 8;
-    
-    // Table header
-    pdf.setFont('helvetica', 'bold');
-    pdf.setFontSize(10);
-    pdf.setTextColor(60, 60, 60);
-    const summaryHeaders = ['Metric', 'Value'];
-    const summaryColWidths = [60, 40];
-    let xPos = margin;
-    
-    summaryHeaders.forEach((header, index) => {
-      pdf.text(header, xPos, yPosition);
-      xPos += summaryColWidths[index];
-    });
-    
-    yPosition += 6;
-    
-    // Table data
-    pdf.setFont('helvetica', 'normal');
-    pdf.setFontSize(9);
-    const summaryData = [
-      { label: 'Total Revenue', value: `LKR ${totalRevenue.toLocaleString()}` },
-      { label: 'Total Profit', value: `LKR ${profit.toLocaleString()}` },
-      { label: 'Profit Margin', value: `${profitMargin.toFixed(1)}%` },
-      { label: 'Total Projects', value: totalProjects.toString() },
-      { label: 'Completed Projects', value: completedProjects.toString() },
-      { label: 'Completion Rate', value: `${completionRate.toFixed(1)}%` },
-      { label: 'Average Project Value', value: `LKR ${averageProjectValue.toLocaleString()}` },
-      { label: 'Best Employee', value: bestEmployee ? `${bestEmployee.firstName} ${bestEmployee.lastName}` : 'N/A' }
-    ];
-    
-    summaryData.forEach(item => {
-      if (yPosition > pageHeight - 40) {
-        pdf.addPage();
-        yPosition = margin;
-      }
-      
-      const rowData = [item.label, item.value];
-      xPos = margin;
-      rowData.forEach((cell, index) => {
-        pdf.setTextColor(30, 30, 30);
-        pdf.text(cell, xPos, yPosition);
-        xPos += summaryColWidths[index];
-      });
-      
-      yPosition += 5;
-    });
-    
-    yPosition += 10;
-    
-    // Revenue Trend Analysis
-    if (revenueTrend.length > 0) {
-      if (yPosition > pageHeight - 60) {
-        pdf.addPage();
-        yPosition = margin;
-      }
+    setIsGenerating(true);
+    try {
+      // Allow hidden chart canvases to finish rendering
+      await new Promise((resolve) => setTimeout(resolve, 700));
 
-      pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(14);
-      pdf.setTextColor(30, 30, 30);
-      pdf.text('REVENUE TREND ANALYSIS', margin, yPosition);
-      yPosition += 8;
-      
-              // Revenue trend table with proper formatting
-        pdf.setFont('helvetica', 'bold');
-        pdf.setFontSize(10);
-        pdf.setTextColor(60, 60, 60);
-        const trendHeaders = ['Month', 'Revenue', 'Profit', 'Projects', 'Completed'];
-        const trendColWidths = [30, 30, 30, 25, 25];
-        let xPos = margin;
-        
-        // Draw table header background
-        pdf.setFillColor(240, 240, 240);
-        pdf.rect(margin, yPosition - 3, pageWidth - (margin * 2), 8, 'F');
-        
-        trendHeaders.forEach((header, index) => {
-          pdf.text(header, xPos, yPosition);
-          xPos += trendColWidths[index];
-        });
-        
-        yPosition += 8;
-        
-        // Trend data
-        pdf.setFont('helvetica', 'normal');
-        pdf.setFontSize(9);
-        revenueTrend.slice(-6).forEach((point, index) => {
-          if (yPosition > pageHeight - 40) {
-            pdf.addPage();
-            yPosition = margin;
-          }
-          
-          // Alternate row background
-          if (index % 2 === 0) {
-            pdf.setFillColor(248, 248, 248);
-            pdf.rect(margin, yPosition - 2, pageWidth - (margin * 2), 6, 'F');
-          }
-          
-          const rowData = [
-            point.month,
-            `LKR ${point.revenue.toLocaleString()}`,
-            `LKR ${point.profit.toLocaleString()}`,
-            point.projects.toString(),
-            point.completed.toString()
-          ];
-          
-          xPos = margin;
-          rowData.forEach((cell, cellIndex) => {
-            pdf.setTextColor(30, 30, 30);
-            pdf.text(cell, xPos, yPosition);
-            xPos += trendColWidths[cellIndex];
-          });
-          
-          yPosition += 6;
-        });
-        
-        yPosition += 10;
-    }
-    
-    // Monthly Performance Analysis
-    if (monthlyData.length > 0) {
-      pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(14);
-      pdf.setTextColor(30, 30, 30);
-      pdf.text('MONTHLY PERFORMANCE ANALYSIS', margin, yPosition);
-      yPosition += 8;
-      
-      // Table header with background
-      pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(10);
-      pdf.setTextColor(60, 60, 60);
-      const tableHeaders = ['Month', 'Projects', 'Completed', 'Revenue', 'Profit', 'Avg Value'];
-      const colWidths = [30, 20, 20, 30, 30, 25];
-      let xPos = margin;
-      
-      // Draw table header background
-      pdf.setFillColor(240, 240, 240);
-      pdf.rect(margin, yPosition - 3, pageWidth - (margin * 2), 8, 'F');
-      
-      tableHeaders.forEach((header, index) => {
-        pdf.text(header, xPos, yPosition);
-        xPos += colWidths[index];
-      });
-      
-      yPosition += 8;
-      
-      // Table data
-      pdf.setFont('helvetica', 'normal');
-      pdf.setFontSize(9);
-      monthlyData.slice(-6).forEach((month, index) => {
-        if (yPosition > pageHeight - 40) {
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 16;
+      const contentWidth = pageWidth - margin * 2;
+      let y = margin;
+
+      const ORANGE: [number, number, number] = [225, 100, 40];
+      const DARK: [number, number, number] = [39, 33, 33];
+      const MUTED: [number, number, number] = [100, 100, 100];
+      const LINE: [number, number, number] = [220, 220, 220];
+
+      const fmtLkr = (n: number) =>
+        `LKR ${Math.round(n).toLocaleString('en-US')}`;
+      const fmtPct = (n: number) => `${n.toFixed(1)}%`;
+
+      const ensureSpace = (needed: number) => {
+        if (y + needed > pageHeight - 22) {
           pdf.addPage();
-          yPosition = margin;
-        }
-        
-        // Alternate row background
-        if (index % 2 === 0) {
-          pdf.setFillColor(248, 248, 248);
-          pdf.rect(margin, yPosition - 2, pageWidth - (margin * 2), 6, 'F');
-        }
-        
-        const monthName = new Date(month.month + '-01').toLocaleDateString('en-US', { 
-          year: 'numeric', 
-          month: 'short' 
-        });
-        
-        const rowData = [
-          monthName,
-          month.projects.toString(),
-          month.completed.toString(),
-          `LKR ${month.revenue.toLocaleString()}`,
-          `LKR ${month.profit.toLocaleString()}`,
-          `LKR ${(month.revenue / month.projects).toLocaleString()}`
-        ];
-        
-        xPos = margin;
-        rowData.forEach((cell, cellIndex) => {
-          pdf.setTextColor(30, 30, 30);
-          pdf.text(cell, xPos, yPosition);
-          xPos += colWidths[cellIndex];
-        });
-        
-        yPosition += 6;
-      });
-      
-      yPosition += 10;
-    }
-    
-    // Employee Performance Analysis
-    if (employeeStats.length > 0) {
-      if (yPosition > pageHeight - 60) {
-        pdf.addPage();
-        yPosition = margin;
-      }
-      
-      pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(14);
-      pdf.setTextColor(30, 30, 30);
-      pdf.text('EMPLOYEE PERFORMANCE ANALYSIS', margin, yPosition);
-      yPosition += 8;
-      
-      // Top performers table with background
-      pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(10);
-      pdf.setTextColor(60, 60, 60);
-      const empHeaders = ['Employee', 'Projects', 'Completed', 'Revenue', 'Completion %'];
-      const empColWidths = [40, 20, 20, 30, 25];
-      let xPos = margin;
-      
-      // Draw table header background
-      pdf.setFillColor(240, 240, 240);
-      pdf.rect(margin, yPosition - 3, pageWidth - (margin * 2), 8, 'F');
-      
-      empHeaders.forEach((header, index) => {
-        pdf.text(header, xPos, yPosition);
-        xPos += empColWidths[index];
-      });
-      
-      yPosition += 8;
-      
-      // Employee data
-      pdf.setFont('helvetica', 'normal');
-      pdf.setFontSize(9);
-      employeeStats.slice(0, 5).forEach((emp, index) => {
-        if (yPosition > pageHeight - 40) {
-          pdf.addPage();
-          yPosition = margin;
-        }
-        
-        // Alternate row background
-        if (index % 2 === 0) {
-          pdf.setFillColor(248, 248, 248);
-          pdf.rect(margin, yPosition - 2, pageWidth - (margin * 2), 6, 'F');
-        }
-        
-        const rowData = [
-          `${emp.firstName} ${emp.lastName}`,
-          emp.projectCount.toString(),
-          emp.completedProjects.toString(),
-          `LKR ${emp.revenue.toLocaleString()}`,
-          `${emp.completionRate.toFixed(1)}%`
-        ];
-        
-        xPos = margin;
-        rowData.forEach((cell, cellIndex) => {
-          pdf.setTextColor(30, 30, 30);
-          pdf.text(cell, xPos, yPosition);
-          xPos += empColWidths[cellIndex];
-        });
-        
-        yPosition += 6;
-      });
-      
-      yPosition += 10;
-    }
-    
-    // Client Analysis
-    if (Object.keys(orgStats).length > 0) {
-      if (yPosition > pageHeight - 60) {
-        pdf.addPage();
-        yPosition = margin;
-      }
-      
-      pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(14);
-      pdf.setTextColor(30, 30, 30);
-      pdf.text('CLIENT PERFORMANCE ANALYSIS', margin, yPosition);
-      yPosition += 8;
-      
-      // Top clients table with background
-      pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(10);
-      pdf.setTextColor(60, 60, 60);
-      const clientHeaders = ['Client/Org', 'Projects', 'Revenue', 'Avg Value'];
-      const clientColWidths = [50, 20, 35, 30];
-      let xPos = margin;
-      
-      // Draw table header background
-      pdf.setFillColor(240, 240, 240);
-      pdf.rect(margin, yPosition - 3, pageWidth - (margin * 2), 8, 'F');
-      
-      clientHeaders.forEach((header, index) => {
-        pdf.text(header, xPos, yPosition);
-        xPos += clientColWidths[index];
-      });
-      
-      yPosition += 8;
-      
-      // Client data
-      pdf.setFont('helvetica', 'normal');
-      pdf.setFontSize(9);
-      Object.entries(orgStats)
-        .sort((a, b) => b[1].revenue - a[1].revenue)
-        .slice(0, 5)
-        .forEach(([org, stats], index) => {
-          if (yPosition > pageHeight - 40) {
-            pdf.addPage();
-            yPosition = margin;
-          }
-          
-          // Alternate row background
-          if (index % 2 === 0) {
-            pdf.setFillColor(248, 248, 248);
-            pdf.rect(margin, yPosition - 2, pageWidth - (margin * 2), 6, 'F');
-          }
-          
-          const rowData = [
-            org.length > 25 ? org.substring(0, 22) + '...' : org,
-            stats.count.toString(),
-            `LKR ${stats.revenue.toLocaleString()}`,
-            `LKR ${stats.avgValue.toLocaleString()}`
-          ];
-          
-          xPos = margin;
-          rowData.forEach((cell, cellIndex) => {
-            pdf.setTextColor(30, 30, 30);
-            pdf.text(cell, xPos, yPosition);
-            xPos += clientColWidths[cellIndex];
-          });
-          
-          yPosition += 6;
-        });
-      
-      yPosition += 10;
-    }
-    
-    // Annual Trends Charts Section - After Client Performance Analysis
-    if (monthlyChartData && Object.keys(monthlyChartData).length > 0 && chartInstancesRef.current.revenue) {
-      // Wait for charts to be fully rendered
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      if (yPosition > pageHeight - 80) {
-        pdf.addPage();
-        yPosition = margin;
-      }
-
-      pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(14);
-      pdf.setTextColor(30, 30, 30);
-      
-      let chartTitle = '';
-      if (chartPeriod === 'daily' && month !== 'all' && year !== 'all') {
-        // Daily view - show month and year
-        const monthName = new Date(0, month as number).toLocaleString('default', { month: 'long' });
-        chartTitle = `Month Trends - ${monthName} ${year}`;
-      } else if (chartPeriod === 'monthly' && year !== 'all') {
-        // Monthly view - show year
-        chartTitle = `Monthly Trends - ${year}`;
-      } else {
-        // Yearly view - show all years
-        chartTitle = 'Annual Trends';
-      }
-      
-      pdf.text(chartTitle, margin, yPosition);
-      yPosition += 10;
-
-      // Helper function to add chart to PDF with high resolution
-      const addChartToPDF = (chartInstance: Chart | undefined, chartTitle: string): void => {
-        if (!chartInstance || !chartInstance.canvas) {
-          console.warn(`Chart ${chartTitle} not available`);
-          return;
-        }
-
-        try {
-          // Export at maximum quality (PNG format with full quality)
-          const chartDataUrl = chartInstance.toBase64Image('image/png', 1.0);
-          
-          if (yPosition > pageHeight - 70) {
-            pdf.addPage();
-            yPosition = margin;
-          }
-
-          // Chart title
-          pdf.setFont('helvetica', 'bold');
-          pdf.setFontSize(12);
-          pdf.setTextColor(30, 30, 30);
-          pdf.text(chartTitle, margin, yPosition);
-          yPosition += 6;
-
-          // Add chart image with larger size for better clarity
-          const chartWidth = pageWidth - (margin * 2);
-          const chartHeight = 65; // Increased height for better visibility and clarity
-          pdf.addImage(chartDataUrl, 'PNG', margin, yPosition, chartWidth, chartHeight, undefined, 'NONE');
-          yPosition += chartHeight + 10;
-        } catch (error) {
-          console.error(`Error adding ${chartTitle} chart to PDF:`, error);
+          y = margin;
         }
       };
 
-      // Add all 5 charts
-      addChartToPDF(chartInstancesRef.current.revenue, 'Revenue Trend');
-      addChartToPDF(chartInstancesRef.current.profit, 'Profit Trend');
-      addChartToPDF(chartInstancesRef.current.employeePayments, 'Employee Payments Trend');
-      addChartToPDF(chartInstancesRef.current.projectTrends, 'Project Trends');
-      addChartToPDF(chartInstancesRef.current.uniqueClients, 'Unique Clients Trend');
-    }
-    
-    // Key Insights and Recommendations
-    if (yPosition > pageHeight - 80) {
-      pdf.addPage();
-      yPosition = margin;
-    }
-    
-    pdf.setFont('helvetica', 'bold');
-    pdf.setFontSize(14);
-    pdf.setTextColor(30, 30, 30);
-    pdf.text('KEY INSIGHTS & RECOMMENDATIONS', margin, yPosition);
-    yPosition += 8;
-    
-    pdf.setFont('helvetica', 'normal');
-    pdf.setFontSize(10);
-    pdf.setTextColor(60, 60, 60);
-    
-    // Enhanced insights with trend analysis
-    const insights = [
-      `• Total Revenue: LKR ${totalRevenue.toLocaleString()} with ${profitMargin.toFixed(1)}% profit margin`,
-      `• Project Completion Rate: ${completionRate.toFixed(1)}% (${completedProjects}/${totalProjects} projects)`,
-      `• Best Performing Employee: ${bestEmployee ? `${bestEmployee.firstName} ${bestEmployee.lastName}` : 'N/A'} with LKR ${bestEmployee ? bestEmployee.displayValue.toLocaleString() : '0'}`,
-      `• Top Client: ${bestOrg ? bestOrg[0] : 'N/A'} with ${bestOrg ? bestOrg[1].count : 0} projects`,
-      `• Average Project Value: LKR ${averageProjectValue.toLocaleString()}`,
-      `• Employee Payments Due: LKR ${totalEmployeePayments.toLocaleString()} (Paid ${totalPaidEmployeePayments.toLocaleString()} · Pending ${totalPendingEmployeePayments.toLocaleString()})`,
-      `• Employee Payment Ratio: ${totalRevenue > 0 ? ((totalEmployeePayments / totalRevenue) * 100).toFixed(1) : '0'}% of revenue`,
-      `• Revenue Trend: ${revenueTrend.length > 1 ? (revenueTrend[revenueTrend.length - 1].revenue > revenueTrend[revenueTrend.length - 2].revenue ? 'Increasing' : 'Decreasing') : 'Stable'} over the last ${revenueTrend.length} months`,
-      `• Monthly Average Revenue: LKR ${revenueTrend.length > 0 ? (revenueTrend.reduce((sum, r) => sum + r.revenue, 0) / revenueTrend.length).toLocaleString() : '0'}`
-    ];
-    
-    insights.forEach(insight => {
-      if (yPosition > pageHeight - 30) {
-        pdf.addPage();
-        yPosition = margin;
+      const drawFooterOnAllPages = () => {
+        const pageCount =
+          typeof pdf.getNumberOfPages === 'function'
+            ? pdf.getNumberOfPages()
+            : pdf.internal.pages
+              ? pdf.internal.pages.length
+              : 1;
+        for (let i = 1; i <= pageCount; i++) {
+          pdf.setPage(i);
+          pdf.setDrawColor(...LINE);
+          pdf.setLineWidth(0.3);
+          pdf.line(margin, pageHeight - 14, pageWidth - margin, pageHeight - 14);
+          pdf.setFont('helvetica', 'normal');
+          pdf.setFontSize(7.5);
+          pdf.setTextColor(...MUTED);
+          pdf.text('OGO Technology · Confidential Internal Report', margin, pageHeight - 8);
+          pdf.text(`Page ${i} of ${pageCount}`, pageWidth - margin, pageHeight - 8, { align: 'right' });
+        }
+      };
+
+      const sectionTitle = (title: string) => {
+        ensureSpace(22);
+        // Consistent gap above every section (skip on fresh page top)
+        if (y > margin + 1) y += 6;
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(11);
+        pdf.setTextColor(...DARK);
+        pdf.text(title.toUpperCase(), margin, y);
+        y += 2.5;
+        pdf.setDrawColor(...ORANGE);
+        pdf.setLineWidth(0.9);
+        pdf.line(margin, y, margin + 32, y);
+        y += 8;
+      };
+
+      const drawTable = (
+        headers: string[],
+        rows: string[][],
+        colWidths: number[],
+        opts?: { emphasizeLast?: boolean }
+      ) => {
+        const rowH = 7.2;
+        const headerH = 8;
+        ensureSpace(headerH + rowH * Math.min(rows.length, 3) + 6);
+
+        // Header
+        pdf.setFillColor(...ORANGE);
+        pdf.rect(margin, y, contentWidth, headerH, 'F');
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(8);
+        pdf.setTextColor(255, 255, 255);
+        let x = margin + 2.5;
+        headers.forEach((h, i) => {
+          pdf.text(h, x, y + 5.3);
+          x += colWidths[i];
+        });
+        y += headerH;
+
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(8);
+        rows.forEach((row, rowIndex) => {
+          ensureSpace(rowH + 2);
+          if (rowIndex % 2 === 0) {
+            pdf.setFillColor(248, 246, 245);
+            pdf.rect(margin, y, contentWidth, rowH, 'F');
+          }
+          x = margin + 2.5;
+          row.forEach((cell, i) => {
+            const isLast = opts?.emphasizeLast && i === row.length - 1;
+            pdf.setFont('helvetica', isLast ? 'bold' : 'normal');
+            pdf.setTextColor(...DARK);
+            const maxW = colWidths[i] - 3;
+            const text = pdf.splitTextToSize(String(cell), maxW)[0] || '';
+            pdf.text(text, x, y + 5);
+            x += colWidths[i];
+          });
+          y += rowH;
+        });
+        y += 3;
+      };
+
+      // ── Header ──────────────────────────────────────────────
+      try {
+        const logoImg = new Image();
+        logoImg.crossOrigin = 'anonymous';
+        logoImg.src = '/logo_ogo.png';
+        await new Promise<void>((resolve, reject) => {
+          logoImg.onload = () => resolve();
+          logoImg.onerror = () => reject(new Error('logo'));
+          setTimeout(() => resolve(), 1500);
+        });
+        // White background + replace baked-in black bg with white
+        const logoCanvas = document.createElement('canvas');
+        logoCanvas.width = 128;
+        logoCanvas.height = 128;
+        const logoCtx = logoCanvas.getContext('2d');
+        if (logoCtx && logoImg.complete && logoImg.naturalWidth > 0) {
+          logoCtx.fillStyle = '#ffffff';
+          logoCtx.fillRect(0, 0, 128, 128);
+          logoCtx.drawImage(logoImg, 0, 0, 128, 128);
+          const imageData = logoCtx.getImageData(0, 0, 128, 128);
+          const pixels = imageData.data;
+          for (let i = 0; i < pixels.length; i += 4) {
+            // Near-black pixels → white (keeps orange OGO letters)
+            if (pixels[i] < 45 && pixels[i + 1] < 45 && pixels[i + 2] < 45) {
+              pixels[i] = 255;
+              pixels[i + 1] = 255;
+              pixels[i + 2] = 255;
+              pixels[i + 3] = 255;
+            }
+          }
+          logoCtx.putImageData(imageData, 0, 0);
+          const logoJpeg = logoCanvas.toDataURL('image/jpeg', 0.9);
+          pdf.addImage(logoJpeg, 'JPEG', margin, y, 14, 14, undefined, 'MEDIUM');
+        }
+      } catch {
+        /* logo optional */
       }
-      pdf.text(insight, margin, yPosition);
-      yPosition += 6;
-    });
-    
-    // Add page numbers
-    const pageCount = (typeof pdf.getNumberOfPages === 'function') ? pdf.getNumberOfPages() : (pdf.internal.pages ? pdf.internal.pages.length : 1);
-    for (let i = 1; i <= pageCount; i++) {
-      pdf.setPage(Number(i));
-      pdf.setFontSize(10);
-      pdf.setTextColor(100, 100, 100);
-      pdf.text(`Page ${i} of ${pageCount}`, pageWidth / 2, pageHeight - 15, { align: 'center' });
-    }
-    
-    // Footer
-    pdf.setFontSize(8);
-    pdf.setTextColor(150, 150, 150);
-    pdf.text('OGO Technology - Professional Project Management System', pageWidth / 2, pageHeight - 8, { align: 'center' });
-    pdf.text('Confidential Business Report - For Internal Use Only', pageWidth / 2, pageHeight - 5, { align: 'center' });
-    
-    // Generate filename
-    let filename = 'OGO-Analytics-Report';
-    if (month !== 'all' && year !== 'all') {
-      filename = `OGO-Analytics-${monthName}-${yearName}`;
-    } else if (month === 'all' && year !== 'all') {
-      filename = `OGO-Analytics-${yearName}`;
-    } else {
-      filename = `OGO-Analytics-Comprehensive-${now.getFullYear()}`;
-    }
-    
-    pdf.save(`${filename}.pdf`);
-    
-    // Log successful export
-    await logAction(null, 'Admin', 'export_success');
 
-    // Persist export summary in database
-    await saveExportSummary();
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(14);
+      pdf.setTextColor(...DARK);
+      pdf.text('OGO TECHNOLOGY', margin + 18, y + 5);
 
-    // Persist KPI percentage comparison data
-    await saveAnalyticsComparison();
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(8);
+      pdf.setTextColor(...MUTED);
+      pdf.text('Department of Academic Services · Galle, Sri Lanka', margin + 18, y + 10);
+      pdf.text('+94 75 930 7059 · info@ogotechnology.com', margin + 18, y + 14);
+
+      const periodLabel =
+        month !== 'all' && year !== 'all'
+          ? `${monthName} ${yearName}`
+          : month === 'all' && year !== 'all'
+            ? `Full Year ${yearName}`
+            : 'All Time';
+
+      pdf.setFillColor(...ORANGE);
+      const badgeText = periodLabel;
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(8);
+      const badgeW = Math.max(28, pdf.getTextWidth(badgeText) + 8);
+      pdf.roundedRect(pageWidth - margin - badgeW, y + 2, badgeW, 8, 2, 2, 'F');
+      pdf.setTextColor(255, 255, 255);
+      pdf.text(badgeText, pageWidth - margin - badgeW / 2, y + 7.2, { align: 'center' });
+
+      y += 20;
+      pdf.setDrawColor(...ORANGE);
+      pdf.setLineWidth(1.2);
+      pdf.line(margin, y, pageWidth - margin, y);
+      y += 8;
+
+      // Title
+      let reportTitle = 'Analytics Report';
+      if (month !== 'all' && year !== 'all') {
+        reportTitle = `Monthly Analytics Report`;
+      } else if (month === 'all' && year !== 'all') {
+        reportTitle = `Annual Analytics Report`;
+      } else {
+        reportTitle = 'Comprehensive Analytics Report';
+      }
+
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(16);
+      pdf.setTextColor(...DARK);
+      pdf.text(reportTitle, pageWidth / 2, y, { align: 'center' });
+      y += 6;
+
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(9);
+      pdf.setTextColor(...MUTED);
+      const generatedDate = now.toLocaleDateString('en-GB', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+      });
+      const generatedTime = now.toLocaleTimeString('en-GB', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      });
+      pdf.text(
+        `Period: ${periodLabel}   ·   Generated: ${generatedDate} at ${generatedTime}`,
+        pageWidth / 2,
+        y,
+        { align: 'center' }
+      );
+      y += 8;
+
+      // ── KPI cards ───────────────────────────────────────────
+      sectionTitle('Executive Summary');
+
+      const kpis: Array<{ label: string; value: string; sub: string; color: [number, number, number] }> = [
+        { label: 'Total Revenue', value: fmtLkr(totalRevenue), sub: `Margin ${fmtPct(profitMargin)}`, color: ORANGE },
+        { label: 'Total Profit', value: fmtLkr(profit), sub: `Avg project ${fmtLkr(averageProjectValue)}`, color: [16, 185, 129] },
+        { label: 'Completion', value: fmtPct(completionRate), sub: `${completedProjects} / ${totalProjects} projects`, color: [139, 92, 246] },
+        { label: 'Emp. Payments', value: fmtLkr(totalEmployeePayments), sub: `Paid ${fmtLkr(totalPaidEmployeePayments)}`, color: [59, 130, 246] },
+        { label: 'Expenses', value: fmtLkr(periodExpenses), sub: 'Business spend', color: [244, 114, 182] },
+        {
+          label: 'Pending Pay',
+          value: fmtLkr(totalPendingEmployeePayments),
+          sub: 'Employee balance',
+          color: [251, 191, 36],
+        },
+      ];
+
+      const cardGap = 3.5;
+      const cardW = (contentWidth - cardGap * 2) / 3;
+      const cardH = 22;
+      ensureSpace(cardH * 2 + cardGap + 8);
+
+      kpis.forEach((kpi, idx) => {
+        const col = idx % 3;
+        const row = Math.floor(idx / 3);
+        const cx = margin + col * (cardW + cardGap);
+        const cy = y + row * (cardH + cardGap);
+
+        pdf.setFillColor(250, 248, 247);
+        pdf.setDrawColor(...LINE);
+        pdf.setLineWidth(0.3);
+        pdf.roundedRect(cx, cy, cardW, cardH, 1.5, 1.5, 'FD');
+
+        pdf.setFillColor(...kpi.color);
+        pdf.rect(cx, cy, 1.5, cardH, 'F');
+
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(7);
+        pdf.setTextColor(...MUTED);
+        pdf.text(kpi.label.toUpperCase(), cx + 4, cy + 5.5);
+
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(10);
+        pdf.setTextColor(...DARK);
+        pdf.text(kpi.value, cx + 4, cy + 12.5);
+
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(7);
+        pdf.setTextColor(...MUTED);
+        pdf.text(kpi.sub, cx + 4, cy + 18);
+      });
+
+      y += cardH * 2 + cardGap + 6;
+
+      // ── Summary table ───────────────────────────────────────
+      sectionTitle('Key Metrics');
+      drawTable(
+        ['Metric', 'Value'],
+        [
+          ['Total Revenue', fmtLkr(totalRevenue)],
+          ['Employee Payments (Due)', fmtLkr(totalEmployeePayments)],
+          ['Business Expenses', fmtLkr(periodExpenses)],
+          ['Net Profit', fmtLkr(profit)],
+          ['Profit Margin', fmtPct(profitMargin)],
+          ['Total Projects', String(totalProjects)],
+          ['Completed Projects', String(completedProjects)],
+          ['Completion Rate', fmtPct(completionRate)],
+          ['Average Project Value', fmtLkr(averageProjectValue)],
+          [
+            'Best Employee',
+            bestEmployee ? `${bestEmployee.firstName} ${bestEmployee.lastName}` : 'N/A',
+          ],
+          ['Top Client / Org', bestOrg ? bestOrg[0] : 'N/A'],
+        ],
+        [contentWidth * 0.55, contentWidth * 0.45],
+        { emphasizeLast: true }
+      );
+
+      // ── Revenue trend ───────────────────────────────────────
+      if (revenueTrend.length > 0) {
+        sectionTitle('Revenue Trend Analysis');
+        drawTable(
+          ['Month', 'Revenue', 'Profit', 'Projects', 'Completed'],
+          revenueTrend.slice(-8).map((p) => [
+            p.month,
+            fmtLkr(p.revenue),
+            fmtLkr(p.profit),
+            String(p.projects),
+            String(p.completed),
+          ]),
+          [
+            contentWidth * 0.22,
+            contentWidth * 0.24,
+            contentWidth * 0.24,
+            contentWidth * 0.15,
+            contentWidth * 0.15,
+          ]
+        );
+      }
+
+      // ── Monthly performance (always starts on a new page) ───
+      if (monthlyData.length > 0) {
+        pdf.addPage();
+        y = margin;
+        sectionTitle('Monthly Performance');
+        drawTable(
+          ['Month', 'Projects', 'Done', 'Revenue', 'Profit', 'Avg Value'],
+          monthlyData.map((m) => {
+            const label = new Date(m.month + '-01').toLocaleDateString('en-US', {
+              month: 'short',
+              year: 'numeric',
+            });
+            return [
+              label,
+              String(m.projects),
+              String(m.completed),
+              fmtLkr(m.revenue),
+              fmtLkr(m.profit),
+              fmtLkr(m.projects > 0 ? m.revenue / m.projects : 0),
+            ];
+          }),
+          [
+            contentWidth * 0.16,
+            contentWidth * 0.12,
+            contentWidth * 0.1,
+            contentWidth * 0.22,
+            contentWidth * 0.22,
+            contentWidth * 0.18,
+          ]
+        );
+      }
+
+      // ── Employee performance ────────────────────────────────
+      if (employeeStats.length > 0) {
+        sectionTitle('Employee Performance');
+        const topEmps = [...employeeStats]
+          .sort((a, b) => b.displayValue - a.displayValue)
+          .slice(0, 10);
+        drawTable(
+          ['Employee', 'Projects', 'Done', 'Rate', 'Earnings'],
+          topEmps.map((emp) => [
+            `${emp.firstName} ${emp.lastName}`,
+            String(emp.projectCount),
+            String(emp.completedProjects),
+            fmtPct(emp.completionRate),
+            fmtLkr(emp.displayValue),
+          ]),
+          [
+            contentWidth * 0.28,
+            contentWidth * 0.14,
+            contentWidth * 0.12,
+            contentWidth * 0.14,
+            contentWidth * 0.32,
+          ],
+          { emphasizeLast: true }
+        );
+      }
+
+      // ── Client performance ──────────────────────────────────
+      if (topClients.length > 0) {
+        sectionTitle('Client Performance');
+        drawTable(
+          ['Client / Organization', 'Projects', 'Revenue', 'Avg Value'],
+          topClients.map((c) => [
+            c.name,
+            String(c.projectCount),
+            fmtLkr(c.revenue),
+            fmtLkr(c.averageValue),
+          ]),
+          [
+            contentWidth * 0.4,
+            contentWidth * 0.15,
+            contentWidth * 0.25,
+            contentWidth * 0.2,
+          ],
+          { emphasizeLast: true }
+        );
+      }
+
+      // ── Charts ──────────────────────────────────────────────
+      if (monthlyChartData && Object.keys(monthlyChartData).length > 0 && chartInstancesRef.current.revenue) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+
+        let chartTitle = 'Trend Charts';
+        if (chartPeriod === 'daily' && month !== 'all' && year !== 'all') {
+          chartTitle = `Daily Trends — ${monthName} ${yearName}`;
+        } else if (chartPeriod === 'monthly' && year !== 'all') {
+          chartTitle = `Monthly Trends — ${yearName}`;
+        } else {
+          chartTitle = 'Annual Trends';
+        }
+
+        sectionTitle(chartTitle);
+
+        // Sharp JPEG: same pixel size as canvas, high quality, no downscale
+        const chartToJpeg = (chartInstance: Chart, quality = 0.84): string | null => {
+          const src = chartInstance.canvas;
+          if (!src) return null;
+          const w = src.width;
+          const h = src.height;
+          const out = document.createElement('canvas');
+          out.width = w;
+          out.height = h;
+          const ctx = out.getContext('2d');
+          if (!ctx) return null;
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, w, h);
+          ctx.drawImage(src, 0, 0, w, h);
+          return out.toDataURL('image/jpeg', quality);
+        };
+
+        const addChart = (chartInstance: Chart | undefined, title: string) => {
+          if (!chartInstance?.canvas) return;
+          try {
+            const chartDataUrl = chartToJpeg(chartInstance, 0.84);
+            if (!chartDataUrl) return;
+            const chartH = 54;
+            ensureSpace(chartH + 16);
+            pdf.setFont('helvetica', 'bold');
+            pdf.setFontSize(9);
+            pdf.setTextColor(...DARK);
+            pdf.text(title, margin, y);
+            y += 5;
+            pdf.addImage(chartDataUrl, 'JPEG', margin, y, contentWidth, chartH, undefined, 'MEDIUM');
+            y += chartH + 10;
+          } catch (err) {
+            console.error(`Error adding ${title} chart:`, err);
+          }
+        };
+
+        addChart(chartInstancesRef.current.revenue, 'Revenue');
+        addChart(chartInstancesRef.current.profit, 'Profit');
+        addChart(chartInstancesRef.current.employeePayments, 'Employee Payments');
+        addChart(chartInstancesRef.current.projectTrends, 'Project Count');
+        addChart(chartInstancesRef.current.uniqueClients, 'Unique Clients');
+      }
+
+      // ── Insights ────────────────────────────────────────────
+      sectionTitle('Key Insights');
+      const insights = [
+        `Revenue of ${fmtLkr(totalRevenue)} at ${fmtPct(profitMargin)} profit margin for ${periodLabel}.`,
+        `Completion rate ${fmtPct(completionRate)} (${completedProjects} of ${totalProjects} projects delivered).`,
+        `Net profit ${fmtLkr(profit)} after employee payments (${fmtLkr(totalEmployeePayments)}) and expenses (${fmtLkr(periodExpenses)}).`,
+        `Best employee: ${bestEmployee ? `${bestEmployee.firstName} ${bestEmployee.lastName}` : 'N/A'} (${fmtLkr(bestEmployee?.displayValue ?? 0)}).`,
+        `Top client: ${bestOrg ? bestOrg[0] : 'N/A'} with ${bestOrg ? bestOrg[1].count : 0} projects (${fmtLkr(bestOrg ? bestOrg[1].revenue : 0)}).`,
+        `Employee payment ratio: ${totalRevenue > 0 ? ((totalEmployeePayments / totalRevenue) * 100).toFixed(1) : '0'}% of revenue.`,
+      ];
+
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(9);
+      insights.forEach((line) => {
+        ensureSpace(12);
+        const wrapped = pdf.splitTextToSize(`•  ${line}`, contentWidth);
+        pdf.setTextColor(...DARK);
+        pdf.text(wrapped, margin, y);
+        y += wrapped.length * 4.8 + 3.5;
+      });
+
+      drawFooterOnAllPages();
+
+      let filename = 'OGO-Analytics-Report';
+      if (month !== 'all' && year !== 'all') {
+        filename = `OGO-Analytics-${monthName}-${yearName}`;
+      } else if (month === 'all' && year !== 'all') {
+        filename = `OGO-Analytics-${yearName}`;
+      } else {
+        filename = `OGO-Analytics-Comprehensive-${now.getFullYear()}`;
+      }
+
+      pdf.save(`${filename}.pdf`);
+
+      await logAction(null, 'Admin', 'export_success');
+      await saveExportSummary();
+      await saveAnalyticsComparison();
+    } catch (err) {
+      console.error('PDF export failed:', err);
+    } finally {
+      setIsGenerating(false);
+      authStartedRef.current = false;
+      onClose();
+    }
   };
-
-  // Handle export button click (triggers authentication)
-  const handleExportClick = async () => {
-    setShowAuthModal(true);
-    setAdminPassword('');
-    setPinInput('');
-    setAuthError('');
-    const email = getSessionEmail();
-    if (email) {
-      const prefs = await loadAdminSecurity(email);
-      setPinEnabled(prefs.pinEnabled);
-    } else {
-      setPinEnabled(false);
-    }
-  };
-
-  useEffect(() => {
-    async function fetchProjectTypes() {
-      const { data, error } = await supabase.from('project_types').select('*');
-      if (!error && data) setProjectTypes(data);
-    }
-    fetchProjectTypes();
-  }, []);
 
   // Render charts when modal opens and data is available
   useEffect(() => {
@@ -1187,7 +1209,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
     });
     chartInstancesRef.current = {};
 
-    // Helper function to create a chart with high resolution settings
+    // Helper: crisp charts for PDF (~150dpi on A4 width, still JPEG-compressed)
     const createChart = (
       canvasRef: React.RefObject<HTMLCanvasElement>,
       label: string,
@@ -1210,93 +1232,82 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
             data: data,
             borderColor: color,
             backgroundColor: backgroundColor,
-            borderWidth: 6, // Increased for high res
-            tension: 0.4,
+            borderWidth: 2.5,
+            tension: 0.35,
             fill: true,
-            pointRadius: 10, // Increased for high res
-            pointHoverRadius: 14,
+            pointRadius: 3.5,
+            pointHoverRadius: 5,
             pointBackgroundColor: color,
-            pointBorderColor: '#fff',
-            pointBorderWidth: 4,
+            pointBorderColor: '#ffffff',
+            pointBorderWidth: 1.5,
           }]
         },
         options: {
-          responsive: false, // Fixed size for high res
+          responsive: false,
           maintainAspectRatio: false,
-          devicePixelRatio: 2, // Higher DPI for clarity
+          animation: false,
+          devicePixelRatio: 1,
+          layout: {
+            padding: { top: 4, right: 10, bottom: 4, left: 4 },
+          },
           plugins: {
             legend: {
               display: true,
               position: 'top',
               labels: {
-                color: '#000000', // Black text
+                color: '#1a1a1a',
                 font: {
-                  family: 'Inter',
-                  size: 24, // Scaled up for high res
+                  family: 'Helvetica',
+                  size: 13,
                   weight: 'bold'
                 },
-                padding: 30,
+                padding: 10,
                 usePointStyle: true,
+                boxWidth: 8,
               }
             },
             tooltip: {
-              backgroundColor: 'rgba(255, 255, 255, 0.95)',
-              titleColor: '#000000', // Black text
-              bodyColor: '#000000', // Black text
-              borderColor: '#E16428',
-              borderWidth: 2,
-              padding: 24,
-              displayColors: true,
-              titleFont: {
-                size: 20
-              },
-              bodyFont: {
-                size: 18
-              },
-              callbacks: {
-                label: function(context) {
-                  if (label === 'Project Count') {
-                    return `${context.dataset.label}: ${context.parsed.y} projects`;
-                  }
-                  if (label === 'Unique Clients') {
-                    return `${context.dataset.label}: ${context.parsed.y} clients`;
-                  }
-                  return `${context.dataset.label}: LKR ${context.parsed.y.toLocaleString()}`;
-                }
-              }
+              enabled: false,
             }
           },
           scales: {
             x: {
               ticks: {
-                color: '#000000', // Black text
+                color: '#333333',
                 font: {
-                  family: 'Inter',
-                  size: 20 // Scaled up for high res
-                }
+                  family: 'Helvetica',
+                  size: 11
+                },
+                maxRotation: 0,
+                autoSkip: true,
+                maxTicksLimit: 12,
               },
               grid: {
-                color: 'rgba(0, 0, 0, 0.1)',
-                lineWidth: 2
+                color: 'rgba(0, 0, 0, 0.08)',
+                lineWidth: 1
               }
             },
             y: {
               ticks: {
-                color: '#000000', // Black text
+                color: '#333333',
                 font: {
-                  family: 'Inter',
-                  size: 20 // Scaled up for high res
+                  family: 'Helvetica',
+                  size: 11
                 },
+                maxTicksLimit: 6,
                 callback: function(value) {
                   if (label === 'Project Count' || label === 'Unique Clients') {
                     return Number(value).toString();
                   }
-                  return 'LKR ' + Number(value).toLocaleString();
+                  const n = Number(value);
+                  if (n >= 1000000) return 'LKR ' + (n / 1000000).toFixed(1) + 'M';
+                  if (n >= 1000) return 'LKR ' + (n / 1000).toFixed(0) + 'K';
+                  return 'LKR ' + n.toLocaleString();
                 }
               },
               grid: {
-                color: 'rgba(0, 0, 0, 0.1)',
-                lineWidth: 2
+                color: 'rgba(0, 0, 0, 0.08)',
+                lineWidth: 1
               },
               beginAtZero: true
             }
@@ -1362,232 +1373,143 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn">
-      {/* Hidden chart canvases for PDF export - positioned off-screen but visible to browser - Higher resolution for clarity */}
-      <div style={{ position: 'absolute', left: '-9999px', top: '-9999px', width: '1600px', height: '800px', pointerEvents: 'none' }}>
-        <canvas ref={revenueChartRef} width={1600} height={800} style={{ display: 'block' }}></canvas>
-        <canvas ref={profitChartRef} width={1600} height={800} style={{ display: 'block' }}></canvas>
-        <canvas ref={employeePaymentsChartRef} width={1600} height={800} style={{ display: 'block' }}></canvas>
-        <canvas ref={projectTrendsChartRef} width={1600} height={800} style={{ display: 'block' }}></canvas>
-        <canvas ref={uniqueClientsChartRef} width={1600} height={800} style={{ display: 'block' }}></canvas>
+    <>
+      {/* Hidden chart canvases for PDF export */}
+      <div
+        style={{
+          position: 'fixed',
+          left: '-9999px',
+          top: '-9999px',
+          width: '1100px',
+          height: '440px',
+          pointerEvents: 'none',
+          opacity: 0,
+        }}
+        aria-hidden
+      >
+        <canvas ref={revenueChartRef} width={1100} height={440} style={{ display: 'block' }} />
+        <canvas ref={profitChartRef} width={1100} height={440} style={{ display: 'block' }} />
+        <canvas ref={employeePaymentsChartRef} width={1100} height={440} style={{ display: 'block' }} />
+        <canvas ref={projectTrendsChartRef} width={1100} height={440} style={{ display: 'block' }} />
+        <canvas ref={uniqueClientsChartRef} width={1100} height={440} style={{ display: 'block' }} />
       </div>
 
-      <div className="bg-[#1a1818] rounded-2xl shadow-2xl max-w-4xl w-full mx-4 p-8 overflow-y-auto max-h-[90vh] relative" ref={reportRef}>
-        {/* Close Button */}
-        <button onClick={onClose} className="absolute top-4 right-4 p-2 bg-[#272121]/60 text-[#F6E9E9] rounded-lg hover:bg-[#E16428]/20 transition-all duration-300">
-          <X className="w-5 h-5" />
-        </button>
-        
-        {/* Company Details */}
-        <div className="flex items-center gap-4 mb-8">
-          <img src="/Logo.jpg" alt="OGO Logo" className="w-14 h-14 rounded-xl object-cover border-2 border-[#E16428]/40 shadow" />
-          <div>
-            <h2 className="text-xl sm:text-2xl font-bold text-[#F6E9E9] font-['Playfair_Display'] tracking-tight lowercase">ogo technology</h2>
-            <p className="text-[#F6E9E9]/70 text-xs sm:text-sm lowercase">comprehensive analytics report</p>
-            <p className="text-[#F6E9E9]/50 text-xs mt-1">generated: {now.toLocaleDateString()} {now.toLocaleTimeString()}</p>
-            <p className="text-[#F6E9E9]/50 text-xs">period: {monthName} {yearName}</p>
-          </div>
-        </div>
-        
-        {/* Enhanced Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-          <div className="bg-gradient-to-r from-[#E16428]/80 to-[#E16428]/40 rounded-xl p-4 flex flex-col gap-2 shadow">
-            <span className="text-[#fff]/80 text-sm font-['Inter']">Total Revenue</span>
-            <span className="text-xl font-bold text-white font-['Poppins']">LKR {totalRevenue.toLocaleString()}</span>
-            <span className="text-[#fff]/60 text-xs">Profit Margin: {profitMargin.toFixed(1)}%</span>
-          </div>
-          <div className="bg-gradient-to-r from-green-500/80 to-green-500/40 rounded-xl p-4 flex flex-col gap-2 shadow">
-            <span className="text-[#fff]/80 text-sm font-['Inter']">Total Profit</span>
-            <span className="text-xl font-bold text-white font-['Poppins']">LKR {profit.toLocaleString()}</span>
-            <span className="text-[#fff]/60 text-xs">Avg Project: LKR {averageProjectValue.toLocaleString()}</span>
-          </div>
-          <div className="bg-gradient-to-r from-purple-500/80 to-purple-500/40 rounded-xl p-4 flex flex-col gap-2 shadow">
-            <span className="text-[#fff]/80 text-sm font-['Inter']">Completion Rate</span>
-            <span className="text-xl font-bold text-white font-['Poppins']">{completionRate.toFixed(1)}%</span>
-            <span className="text-[#fff]/60 text-xs">{completedProjects}/{totalProjects} Projects</span>
-          </div>
-          <div className="bg-gradient-to-r from-yellow-500/80 to-yellow-500/40 rounded-xl p-4 flex flex-col gap-2 shadow">
-            <span className="text-[#fff]/80 text-sm font-['Inter']">Employee Payments</span>
-            <span className="text-xl font-bold text-white font-['Poppins']">LKR {totalEmployeePayments.toLocaleString()}</span>
-            <span className="text-[#fff]/60 text-xs">
-              Paid {totalPaidEmployeePayments.toLocaleString()} · Pending {totalPendingEmployeePayments.toLocaleString()}
-            </span>
-          </div>
-        </div>
-        
-        {/* Revenue Trend Chart Preview */}
-        {revenueTrend.length > 0 && (
-          <div className="bg-[#272121]/80 rounded-xl p-6 mb-8">
-            <h3 className="text-lg font-bold text-[#E16428] mb-4 font-['Poppins']">Revenue Trend Analysis</h3>
-            <div className="space-y-3">
-              {revenueTrend.slice(-6).map((trend, index) => (
-                <div key={index} className="flex justify-between items-center p-3 bg-[#1a1818]/50 rounded-lg">
-                  <div>
-                    <p className="text-[#F6E9E9] font-medium text-sm">{trend.month}</p>
-                    <p className="text-[#F6E9E9]/70 text-xs">{trend.projects} projects</p>
-          </div>
-                  <div className="text-right">
-                    <p className="text-[#E16428] font-bold text-sm">LKR {trend.revenue.toLocaleString()}</p>
-                    <p className="text-[#F6E9E9]/70 text-xs">Profit: LKR {trend.profit.toLocaleString()}</p>
-          </div>
-        </div>
-              ))}
+      {/* Generating overlay */}
+      {isGenerating &&
+        ReactDOM.createPortal(
+          <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fadeIn">
+            <div className="w-full max-w-sm p-6 text-center animate-scaleIn">
+              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full border border-[#E16428]/30 bg-[#E16428]/12">
+                <div className="h-6 w-6 animate-spin rounded-full border-2 border-[#E16428]/30 border-t-[#E16428]" />
+              </div>
+              <h3 className="text-lg font-semibold text-[#F6E9E9] font-['Poppins'] mb-1">
+                Generating PDF
+              </h3>
+              <p className="text-[#F6E9E9]/65 text-sm font-['Inter']">
+                Formatting report for {monthName} {yearName}…
+              </p>
             </div>
-          </div>
+          </div>,
+          document.body
         )}
-        
-        {/* Enhanced Performance Tables */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-          <div className="bg-[#272121]/80 rounded-xl p-6">
-            <h3 className="text-lg font-bold text-[#E16428] mb-4 font-['Poppins']">Top Employees</h3>
-            <div className="space-y-3">
-              {employeeStats.slice(0, 3).map(emp => (
-                <div key={emp.id} className="flex justify-between items-center p-3 bg-[#1a1818]/50 rounded-lg">
-                  <div>
-                    <p className="text-[#F6E9E9] font-medium text-sm">{emp.firstName} {emp.lastName}</p>
-                    <p className="text-[#F6E9E9]/70 text-xs">{emp.completedProjects}/{emp.projectCount} completed</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-[#E16428] font-bold text-sm">LKR {emp.displayValue.toLocaleString()}</p>
-                    <p className="text-[#F6E9E9]/70 text-xs">{emp.completionRate.toFixed(1)}% success</p>
-                  </div>
-        </div>
-              ))}
-            </div>
-          </div>
-          
-          <div className="bg-[#272121]/80 rounded-xl p-6">
-            <h3 className="text-lg font-bold text-[#E16428] mb-4 font-['Poppins']">Top Clients</h3>
-            <div className="space-y-3">
-              {Object.entries(orgStats)
-                .sort((a, b) => b[1].revenue - a[1].revenue)
-                .slice(0, 3)
-                .map(([org, stats]) => (
-                  <div key={org} className="flex justify-between items-center p-3 bg-[#1a1818]/50 rounded-lg">
-                    <div>
-                      <p className="text-[#F6E9E9] font-medium text-sm">{org.length > 25 ? org.substring(0, 22) + '...' : org}</p>
-                      <p className="text-[#F6E9E9]/70 text-xs">{stats.count} projects</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-[#E16428] font-bold text-sm">LKR {stats.revenue.toLocaleString()}</p>
-                      <p className="text-[#F6E9E9]/70 text-xs">Avg: LKR {stats.avgValue.toLocaleString()}</p>
-                    </div>
-                  </div>
-                ))}
-            </div>
-          </div>
-        </div>
-        
-        {/* Export Button */}
-        <div className="flex justify-end mt-6">
-          <button
-            onClick={handleExportClick}
-            className="px-6 py-3 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white rounded-lg hover:scale-105 transition-all duration-300 shadow-lg font-['Poppins'] font-bold flex items-center gap-2"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            Export Comprehensive PDF
-          </button>
-        </div>
-      </div>
 
       {/* Authentication Modal */}
-      {showAuthModal && ReactDOM.createPortal(
-        <div
-          className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fadeIn"
-          onClick={closeAuthModal}
-        >
+      {showAuthModal &&
+        ReactDOM.createPortal(
           <div
-            className="w-full max-w-sm p-6 animate-scaleIn"
-            onClick={(e) => e.stopPropagation()}
+            className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fadeIn"
+            onClick={() => closeAuthModal(true)}
           >
-            <div className="flex items-center justify-between mb-5">
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-full border border-[#E16428]/30 bg-[#E16428]/12">
-                  {pinEnabled ? (
-                    <KeyRound className="w-4 h-4 text-[#E16428]" />
-                  ) : (
-                    <Lock className="w-4 h-4 text-[#E16428]" />
-                  )}
+            <div className="w-full max-w-sm p-6 animate-scaleIn" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-5">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full border border-[#E16428]/30 bg-[#E16428]/12">
+                    {pinEnabled ? (
+                      <KeyRound className="w-4 h-4 text-[#E16428]" />
+                    ) : (
+                      <Lock className="w-4 h-4 text-[#E16428]" />
+                    )}
+                  </div>
+                  <h3 className="text-lg font-semibold text-[#F6E9E9] font-['Poppins']">
+                    {pinEnabled ? 'Verify PIN' : 'Admin Authentication'}
+                  </h3>
                 </div>
-                <h3 className="text-lg font-semibold text-[#F6E9E9] font-['Poppins']">
-                  {pinEnabled ? 'Verify PIN' : 'Admin Authentication'}
-                </h3>
+                <button
+                  type="button"
+                  onClick={() => closeAuthModal(true)}
+                  className="p-1 text-[#F6E9E9]/60 hover:text-[#F6E9E9] transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={closeAuthModal}
-                className="p-1 text-[#F6E9E9]/60 hover:text-[#F6E9E9] transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <p className="text-[#F6E9E9]/70 text-sm mb-4 font-['Inter']">
-              {pinEnabled
-                ? 'Enter your OGO PIN to export the report.'
-                : 'Enter admin password to export the report.'}
-            </p>
+              <p className="text-[#F6E9E9]/70 text-sm mb-1 font-['Inter']">
+                {pinEnabled
+                  ? 'Enter your OGO PIN to generate the PDF report.'
+                  : 'Enter admin password to generate the PDF report.'}
+              </p>
+              <p className="text-[#F6E9E9]/45 text-xs mb-4 font-['Inter']">
+                Period: {monthName} {yearName}
+              </p>
 
-            {pinEnabled ? (
-              <div className="space-y-4">
-                <input
-                  type="password"
-                  inputMode="numeric"
-                  maxLength={getSessionEmail() ? getStoredPinLength(getSessionEmail()!) : 4}
-                  value={pinInput}
-                  onChange={(e) => onPinChange(e.target.value)}
-                  disabled={isAuthenticating}
-                  placeholder="OGO PIN"
-                  autoFocus
-                  className="underline-field w-full px-1 py-3 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] placeholder-[#F6E9E9]/40 focus:outline-none focus:border-[#E16428] focus:ring-0 focus:shadow-none transition-all duration-300 font-['Inter'] tracking-[0.35em] text-center text-lg"
-                />
-                {authError && (
-                  <p className="text-red-400 text-sm text-center font-['Inter']">{authError}</p>
-                )}
-              </div>
-            ) : (
-              <form onSubmit={handleAuthSubmit} className="space-y-4">
-                <div>
+              {pinEnabled ? (
+                <div className="space-y-4">
                   <input
                     type="password"
-                    value={adminPassword}
-                    onChange={(e) => {
-                      setAdminPassword(e.target.value);
-                      setAuthError('');
-                    }}
-                    className="underline-field w-full px-1 py-3 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] placeholder-[#F6E9E9]/40 focus:outline-none focus:border-[#E16428] focus:ring-0 focus:shadow-none transition-all duration-300 font-['Inter']"
-                    placeholder="Enter admin password"
+                    inputMode="numeric"
+                    maxLength={getSessionEmail() ? getStoredPinLength(getSessionEmail()!) : 4}
+                    value={pinInput}
+                    onChange={(e) => onPinChange(e.target.value)}
+                    disabled={isAuthenticating}
+                    placeholder="OGO PIN"
                     autoFocus
+                    className="underline-field w-full px-1 py-3 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] placeholder-[#F6E9E9]/40 focus:outline-none focus:border-[#E16428] focus:ring-0 focus:shadow-none transition-all duration-300 font-['Inter'] tracking-[0.35em] text-center text-lg"
                   />
                   {authError && (
-                    <p className="mt-2 text-red-400 text-sm font-['Inter']">{authError}</p>
+                    <p className="text-red-400 text-sm text-center font-['Inter']">{authError}</p>
                   )}
                 </div>
-                <div className="flex gap-3">
-                  <button
-                    type="button"
-                    onClick={closeAuthModal}
-                    className="flex-1 px-4 py-2.5 bg-transparent border border-[#E16428]/25 text-[#F6E9E9]/80 rounded-lg hover:border-[#E16428]/45 hover:bg-[#E16428]/8 transition-all duration-200 font-['Inter'] text-sm"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isAuthenticating}
-                    className="flex-1 px-4 py-2.5 bg-[#E16428] text-white rounded-lg hover:bg-[#d4551f] transition-colors font-['Inter'] text-sm font-semibold disabled:opacity-50"
-                  >
-                    {isAuthenticating ? '…' : 'Export Report'}
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
-        </div>,
-        document.body
-      )}
-    </div>
+              ) : (
+                <form onSubmit={handleAuthSubmit} className="space-y-4">
+                  <div>
+                    <input
+                      type="password"
+                      value={adminPassword}
+                      onChange={(e) => {
+                        setAdminPassword(e.target.value);
+                        setAuthError('');
+                      }}
+                      className="underline-field w-full px-1 py-3 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] placeholder-[#F6E9E9]/40 focus:outline-none focus:border-[#E16428] focus:ring-0 focus:shadow-none transition-all duration-300 font-['Inter']"
+                      placeholder="Enter admin password"
+                      autoFocus
+                    />
+                    {authError && (
+                      <p className="mt-2 text-red-400 text-sm font-['Inter']">{authError}</p>
+                    )}
+                  </div>
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => closeAuthModal(true)}
+                      className="flex-1 px-4 py-2.5 bg-transparent border border-[#E16428]/25 text-[#F6E9E9]/80 rounded-lg hover:border-[#E16428]/45 hover:bg-[#E16428]/8 transition-all duration-200 font-['Inter'] text-sm"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isAuthenticating}
+                      className="flex-1 px-4 py-2.5 bg-[#E16428] text-white rounded-lg hover:bg-[#d4551f] transition-colors font-['Inter'] text-sm font-semibold disabled:opacity-50"
+                    >
+                      {isAuthenticating ? '…' : 'Generate PDF'}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
+          </div>,
+          document.body
+        )}
+    </>
   );
 };
 
-export default ReportModal; 
+export default ReportModal;

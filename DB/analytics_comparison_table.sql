@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS analytics_comparison (
     profit_change_percentage DECIMAL(6,2), -- Percentage change in profit vs previous month
     profit_margin_change_percentage DECIMAL(6,2), -- Percentage change in profit margin vs previous month
     employee_payments_change_percentage DECIMAL(6,2), -- Percentage change in employee payments vs previous month
+    expenses_change_percentage DECIMAL(6,2), -- Percentage change in business expenses vs previous month
     unique_clients_change_percentage DECIMAL(6,2), -- Percentage change in unique clients vs previous month
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -35,6 +36,7 @@ COMMENT ON COLUMN analytics_comparison.revenue_change_percentage IS 'Percentage 
 COMMENT ON COLUMN analytics_comparison.profit_change_percentage IS 'Percentage change in total profit compared to previous month (can be positive or negative)';
 COMMENT ON COLUMN analytics_comparison.profit_margin_change_percentage IS 'Percentage change in profit margin compared to previous month (can be positive or negative)';
 COMMENT ON COLUMN analytics_comparison.employee_payments_change_percentage IS 'Percentage change in employee payments compared to previous month (can be positive or negative)';
+COMMENT ON COLUMN analytics_comparison.expenses_change_percentage IS 'Percentage change in business expenses compared to previous month (can be positive or negative)';
 COMMENT ON COLUMN analytics_comparison.unique_clients_change_percentage IS 'Percentage change in unique clients count compared to previous month (can be positive or negative)';
 COMMENT ON COLUMN analytics_comparison.created_at IS 'Timestamp when the comparison record was created';
 COMMENT ON COLUMN analytics_comparison.updated_at IS 'Timestamp when the comparison record was last updated';

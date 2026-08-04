@@ -49,5 +49,40 @@ export interface Employee {
   qualifications: string;
   /** Defaults to true when missing (legacy rows). */
   isActive?: boolean;
+  /** When true, employee appears in Analytics → Employee Performance. Defaults to true. */
+  showInPerformance?: boolean;
   createdAt?: string;
+}
+
+export type ExpenseType = 'subscription' | 'one_time';
+export type ExpenseBillingCycle = 'monthly' | 'yearly';
+export type ExpenseStatus = 'active' | 'paused' | 'cancelled' | 'paid';
+export type ExpenseCategory =
+  | 'AI Tools'
+  | 'Marketing'
+  | 'Print'
+  | 'Software'
+  | 'Office'
+  | 'Other';
+
+export interface Expense {
+  id: string;
+  name: string;
+  /** Account username or email (e.g. Cursor / ChatGPT login). */
+  account: string;
+  amount: number;
+  category: ExpenseCategory;
+  type: ExpenseType;
+  billingCycle: ExpenseBillingCycle | null;
+  startDate: string | null;
+  nextRenewalDate: string | null;
+  expenseDate: string | null;
+  reminderDaysBefore: number;
+  status: ExpenseStatus;
+  notes: string;
+  paymentMethod: string;
+  /** Public URL of product logo in Supabase storage. */
+  imageUrl: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 }

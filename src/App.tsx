@@ -3,6 +3,7 @@ import { Header } from "./components/Header";
 import { Navigation } from "./components/Navigation";
 import { Dashboard } from "./components/Dashboard";
 import { Analytics } from "./components/Analytics";
+import { Expenses } from "./components/Expenses";
 import { ProjectManagement } from "./components/ProjectManagement";
 import { EmployeeManagement } from "./components/EmployeeManagement";
 import { Settings } from "./components/Settings";
@@ -120,6 +121,11 @@ export function App() {
 
   const clearSession = () => {
     localStorage.removeItem('ogo_session');
+    try {
+      sessionStorage.removeItem('ogo_dash_sub_banner_dismissed');
+    } catch {
+      /* ignore */
+    }
   };
 
   const logSessionExpiry = async (email: string) => {
@@ -264,8 +270,11 @@ export function App() {
               refetchProjects();
               refetchEmployees();
             }}
+            onOpenExpenses={() => setActiveTab('expenses')}
           />
         );
+      case "expenses":
+        return <Expenses />;
       case "analytics":
         return (
           <Analytics
@@ -294,6 +303,7 @@ export function App() {
               refetchProjects();
               refetchEmployees();
             }}
+            onOpenExpenses={() => setActiveTab('expenses')}
           />
         );
     }

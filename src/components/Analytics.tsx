@@ -1,12 +1,12 @@
 import React, { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import ReactDOM from 'react-dom';
-import { TrendingUp, DollarSign, Users, Calendar, Clock, Download, Lock, X, Info, CalendarDays, CalendarRange, BarChart, Table as TableIcon, ChevronDown, KeyRound } from 'lucide-react';
+import { TrendingUp, DollarSign, Users, Calendar, Clock, Download, Lock, X, Info, CalendarDays, CalendarRange, BarChart, Table as TableIcon, ChevronDown, KeyRound, Wallet, Receipt, Repeat, Percent } from 'lucide-react';
 import { Project, Employee } from '../types';
 import { GlassCard } from './GlassCard';
 import { MonthYearNavigator } from './MonthYearNavigator';
 import ReportModal from './ReportModal';
 import { supabase } from '../supabaseClient';
-import { Chart, LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend, LineController, Filler } from 'chart.js';
+import { Chart, LineElement, PointElement, BarElement, CategoryScale, LinearScale, Tooltip, Legend, LineController, BarController, Filler } from 'chart.js';
 import { useLastRefresh } from '../contexts/LastRefreshContext';
 import {
   getEmployeeProjectPaymentBreakdown,
@@ -21,7 +21,38 @@ import {
   loadAdminSecurity,
 } from '../utils/adminSecurity';
 
-Chart.register(LineElement, PointElement, CategoryScale, LinearScale, Tooltip, Legend, LineController, Filler);
+Chart.register(LineElement, PointElement, BarElement, CategoryScale, LinearScale, Tooltip, Legend, LineController, BarController, Filler);
+
+type ComparisonMetric =
+  | 'revenue'
+  | 'profit'
+  | 'profitMargin'
+  | 'employeePayments'
+  | 'expenses'
+  | 'uniqueClients';
+
+const COMPARISON_METRICS: Array<{
+  id: ComparisonMetric;
+  label: string;
+  shortLabel: string;
+  field:
+    | 'revenue_change_percentage'
+    | 'profit_change_percentage'
+    | 'profit_margin_change_percentage'
+    | 'employee_payments_change_percentage'
+    | 'expenses_change_percentage'
+    | 'unique_clients_change_percentage';
+  color: string;
+  fill: string;
+  inverted: boolean;
+}> = [
+  { id: 'revenue', label: 'Revenue', shortLabel: 'Revenue', field: 'revenue_change_percentage', color: '#E16428', fill: 'rgba(225, 100, 40, 0.55)', inverted: false },
+  { id: 'profit', label: 'Profit', shortLabel: 'Profit', field: 'profit_change_percentage', color: '#34d399', fill: 'rgba(52, 211, 153, 0.55)', inverted: false },
+  { id: 'profitMargin', label: 'Profit Margin', shortLabel: 'Margin', field: 'profit_margin_change_percentage', color: '#a78bfa', fill: 'rgba(167, 139, 250, 0.55)', inverted: false },
+  { id: 'employeePayments', label: 'Emp. Payments', shortLabel: 'Emp. Pay', field: 'employee_payments_change_percentage', color: '#60a5fa', fill: 'rgba(96, 165, 250, 0.55)', inverted: true },
+  { id: 'expenses', label: 'Expenses', shortLabel: 'Expenses', field: 'expenses_change_percentage', color: '#f472b6', fill: 'rgba(244, 114, 182, 0.55)', inverted: true },
+  { id: 'uniqueClients', label: 'Unique Clients', shortLabel: 'Clients', field: 'unique_clients_change_percentage', color: '#fbbf24', fill: 'rgba(251, 191, 36, 0.55)', inverted: false },
+];
 
 interface AnalyticsProps {
   projects: Project[];
@@ -35,6 +66,24 @@ interface MonthlyData {
   projects: number;
   completed: number;
   employeePayments: number;
+  expenses: number;
+}
+
+interface AnalyticsExpenseRow {
+  id: string;
+  amount: number;
+  type: 'subscription' | 'one_time';
+  expenseDate: string | null;
+  nextRenewalDate: string | null;
+  startDate: string | null;
+  createdAt: string | null;
+}
+
+function expenseAnchorDate(row: AnalyticsExpenseRow): string | null {
+  if (row.type === 'subscription') {
+    return row.nextRenewalDate || row.startDate || row.createdAt?.slice(0, 10) || null;
+  }
+  return row.expenseDate || row.createdAt?.slice(0, 10) || null;
 }
 
 export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRefresh }) => {
@@ -80,8 +129,9 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
   const [periodDropdownOpen, setPeriodDropdownOpen] = useState(false);
   const [viewDropdownOpen, setViewDropdownOpen] = useState(false);
   const [metricsDropdownOpen, setMetricsDropdownOpen] = useState(false);
-  const [mobileActionsDropdownOpen, setMobileActionsDropdownOpen] = useState(false);
   const [empPaymentsCardSlide, setEmpPaymentsCardSlide] = useState(0); // 0 = total due, 1 = paid, 2 = pending
+  const [expensesCardSlide, setExpensesCardSlide] = useState(0); // 0 = total, 1 = one-time, 2 = subscription
+  const [expenses, setExpenses] = useState<AnalyticsExpenseRow[]>([]);
   
   // Analytics comparison data state
   const [analyticsComparison, setAnalyticsComparison] = useState<Array<{
@@ -91,6 +141,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
     profit_change_percentage: number | null;
     profit_margin_change_percentage: number | null;
     employee_payments_change_percentage: number | null;
+    expenses_change_percentage: number | null;
     unique_clients_change_percentage: number | null;
     created_at: string;
   }>>([]);
@@ -101,10 +152,40 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
   const [chartPeriod, setChartPeriod] = useState<'yearly' | 'monthly' | 'daily'>('daily');
   const chartRef = useRef<HTMLCanvasElement>(null);
   const chartInstanceRef = useRef<Chart | null>(null);
+  const [comparisonViewMode, setComparisonViewMode] = useState<'chart' | 'table'>('table');
+  const [comparisonMetric, setComparisonMetric] = useState<ComparisonMetric>('revenue');
+  const [comparisonViewDropdownOpen, setComparisonViewDropdownOpen] = useState(false);
+  const [comparisonMetricDropdownOpen, setComparisonMetricDropdownOpen] = useState(false);
+  const comparisonChartRef = useRef<HTMLCanvasElement>(null);
+  const comparisonChartInstanceRef = useRef<Chart | null>(null);
   
   // Notification modal state
   const [showNotification, setShowNotification] = useState(false);
   const [notificationMessage, setNotificationMessage] = useState('');
+
+  // Fetch expenses for profit + KPI cards
+  const fetchExpenses = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from('expenses')
+        .select('id, amount, type, expense_date, next_renewal_date, start_date, created_at');
+      if (error) throw error;
+      setExpenses(
+        (data || []).map((row: any) => ({
+          id: row.id,
+          amount: Number(row.amount) || 0,
+          type: row.type === 'subscription' ? 'subscription' : 'one_time',
+          expenseDate: row.expense_date,
+          nextRenewalDate: row.next_renewal_date,
+          startDate: row.start_date,
+          createdAt: row.created_at,
+        }))
+      );
+    } catch (err) {
+      console.error('Error loading expenses for analytics:', err);
+      setExpenses([]);
+    }
+  }, []);
 
   // Auto-refresh functionality
   const handleRefresh = useCallback(async () => {
@@ -112,6 +193,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
       setIsRefreshing(true);
       try {
         await onRefresh();
+        await fetchExpenses();
         const refreshTime = new Date();
         setLastRefresh(refreshTime);
       } catch (error) {
@@ -120,7 +202,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
         setIsRefreshing(false);
       }
     }
-  }, [onRefresh, isRefreshing, setLastRefresh]);
+  }, [onRefresh, isRefreshing, setLastRefresh, fetchExpenses]);
 
   // Auto-refresh when component mounts or when navigating to analytics
   useEffect(() => {
@@ -154,6 +236,18 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
     return () => clearInterval(interval);
   }, []);
 
+  // Auto-slide Total / One-time / Subscription expenses KPI
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setExpensesCardSlide(prev => (prev + 1) % 3);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    void fetchExpenses();
+  }, [fetchExpenses]);
+
   // ESC key handler to close login modal
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -177,22 +271,32 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
     fetchProjectTypes();
   }, []);
 
-  // Fetch analytics comparison data
+  // Fetch analytics comparison data for selected year
   useEffect(() => {
     async function fetchAnalyticsComparison() {
-      const { data, error } = await supabase
+      let query = supabase
         .from('analytics_comparison')
         .select('*')
         .order('year', { ascending: false })
-        .order('month', { ascending: false })
-        .limit(12); // Show last 12 months
-      
+        .order('month', { ascending: false });
+
+      if (selectedYear !== 'all') {
+        query = query.eq('year', selectedYear);
+      } else {
+        query = query.limit(24);
+      }
+
+      const { data, error } = await query;
+
       if (!error && data) {
         setAnalyticsComparison(data);
+      } else if (error) {
+        console.error('Failed to fetch analytics comparison:', error);
+        setAnalyticsComparison([]);
       }
     }
-    fetchAnalyticsComparison();
-  }, []);
+    void fetchAnalyticsComparison();
+  }, [selectedYear]);
 
   // Calculate year range dynamically for the year dropdown
   const availableYears = useMemo(() => {
@@ -217,6 +321,47 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
     });
   }, [projects, selectedMonth, selectedYear]);
 
+  // Filtered expenses by month/year (same anchor-date logic as Expenses page)
+  const filteredExpenses = useMemo(() => {
+    return expenses.filter(expense => {
+      const iso = expenseAnchorDate(expense);
+      if (!iso) return selectedMonth === 'all' && selectedYear === 'all';
+      const date = new Date(iso + 'T12:00:00');
+      const monthOk = selectedMonth === 'all' || date.getMonth() === selectedMonth;
+      const yearOk = selectedYear === 'all' || date.getFullYear() === selectedYear;
+      return monthOk && yearOk;
+    });
+  }, [expenses, selectedMonth, selectedYear]);
+
+  const totalPeriodExpenses = useMemo(
+    () => filteredExpenses.reduce((sum, e) => sum + e.amount, 0),
+    [filteredExpenses]
+  );
+  const oneTimeExpenses = useMemo(
+    () => filteredExpenses.filter(e => e.type === 'one_time').reduce((sum, e) => sum + e.amount, 0),
+    [filteredExpenses]
+  );
+  const subscriptionExpenses = useMemo(
+    () =>
+      filteredExpenses.filter(e => e.type === 'subscription').reduce((sum, e) => sum + e.amount, 0),
+    [filteredExpenses]
+  );
+
+  // Expenses totals keyed by YYYY-MM for KPI month comparisons / charts
+  const expensesByMonthKey = useMemo(() => {
+    const map: Record<string, { total: number; one_time: number; subscription: number }> = {};
+    expenses.forEach(expense => {
+      const iso = expenseAnchorDate(expense);
+      if (!iso) return;
+      const date = new Date(iso + 'T12:00:00');
+      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      if (!map[key]) map[key] = { total: 0, one_time: 0, subscription: 0 };
+      map[key].total += expense.amount;
+      map[key][expense.type] += expense.amount;
+    });
+    return map;
+  }, [expenses]);
+
   const monthlyData = useMemo(() => {
     const months: Record<string, MonthlyData> = {};
     
@@ -233,6 +378,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
           projects: 0,
           completed: 0,
           employeePayments: 0,
+          expenses: 0,
         };
       }
       
@@ -244,9 +390,29 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
         months[monthKey].completed += 1;
       }
     });
+
+    // Attach / create months for expenses in the selected period
+    Object.entries(expensesByMonthKey).forEach(([monthKey, totals]) => {
+      const [y, m] = monthKey.split('-').map(Number);
+      const monthOk = selectedMonth === 'all' || m - 1 === selectedMonth;
+      const yearOk = selectedYear === 'all' || y === selectedYear;
+      if (!monthOk || !yearOk) return;
+
+      if (!months[monthKey]) {
+        months[monthKey] = {
+          month: monthKey,
+          revenue: 0,
+          projects: 0,
+          completed: 0,
+          employeePayments: 0,
+          expenses: 0,
+        };
+      }
+      months[monthKey].expenses = totals.total;
+    });
     
     return Object.values(months).sort((a, b) => a.month.localeCompare(b.month));
-  }, [filteredProjects]);
+  }, [filteredProjects, expensesByMonthKey, selectedMonth, selectedYear]);
 
   // KPI data for all months (used for month-over-month comparison)
   const monthlyKpiMap = useMemo(() => {
@@ -282,6 +448,19 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
       map[key].uniqueClients.add(clientKey);
     });
 
+    // Deduct business expenses from monthly profit
+    Object.keys(expensesByMonthKey).forEach(key => {
+      if (!map[key]) {
+        map[key] = {
+          revenue: 0,
+          profit: 0,
+          employeePayments: 0,
+          uniqueClients: new Set<string>(),
+        };
+      }
+      map[key].profit -= expensesByMonthKey[key].total;
+    });
+
     // Second pass: calculate new clients (excluding those from previous months)
     const sortedKeys = Object.keys(map).sort();
     const previousMonthsClients = new Set<string>();
@@ -313,7 +492,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
     });
 
     return result;
-  }, [projects]);
+  }, [projects, expensesByMonthKey]);
 
   // Helper: get month-over-month percentage change for a KPI
   const getKpiChange = (metric: 'revenue' | 'profit' | 'employeePayments' | 'uniqueClients') => {
@@ -336,6 +515,26 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
     const change = ((currentValue - prevValue) / prevValue) * 100;
     return change;
   };
+
+  const getExpenseKpiChange = (metric: 'total' | 'one_time' | 'subscription') => {
+    if (selectedMonth === 'all' || selectedYear === 'all') return null;
+
+    const year = selectedYear;
+    const monthIndex = selectedMonth;
+    const currentKey = `${year}-${String(monthIndex + 1).padStart(2, '0')}`;
+    const prevDate = new Date(year, monthIndex - 1, 1);
+    const prevKey = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, '0')}`;
+
+    const currentValue = expensesByMonthKey[currentKey]?.[metric] ?? 0;
+    const prevValue = expensesByMonthKey[prevKey]?.[metric] ?? 0;
+
+    if (!prevValue || prevValue === 0) return null;
+    return ((currentValue - prevValue) / prevValue) * 100;
+  };
+
+  const expensesChange = getExpenseKpiChange('total');
+  const oneTimeExpensesChange = getExpenseKpiChange('one_time');
+  const subscriptionExpensesChange = getExpenseKpiChange('subscription');
 
   // Calculate unique clients excluding those from previous months
   const uniqueClients = useMemo(() => {
@@ -403,7 +602,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
     (sum, project) => sum + getProjectEmployeePaymentsPending(project),
     0
   );
-  const profit = totalRevenue - totalEmployeePayments;
+  const profit = totalRevenue - totalEmployeePayments - totalPeriodExpenses;
   const profitMargin = totalRevenue > 0 ? (profit / totalRevenue) * 100 : 0;
 
   // Total Upcoming: sum of balance from running projects
@@ -432,7 +631,9 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
   const uniqueClientsChange = getKpiChange('uniqueClients');
 
   const employeePerformance = useMemo(() => {
-    return employees.map(employee => {
+    return employees
+      .filter(employee => employee.showInPerformance !== false)
+      .map(employee => {
       // Filter projects where this employee is assigned (handles comma-separated IDs)
       const employeeProjects = filteredProjects.filter(p => {
         if (!p.assignedTo) return false;
@@ -440,25 +641,31 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
         return assignedIds.includes(employee.id);
       });
       
-      const completed = employeeProjects.filter(p => p.status === 'Delivered').length;
+      const completed = employeeProjects.filter(
+        p => p.status === 'Delivered' || p.status === 'Pending Payment'
+      ).length;
       
       // Calculate earnings using individual employee payments (due / paid / remaining)
       let totalEarnings = 0;
       let pendingEarnings = 0;
       let paidEarnings = 0;
+      /** Pending employee pay only on completed projects (Delivered / Pending Payment). */
+      let pendingCompletedEarnings = 0;
 
       employeeProjects.forEach(p => {
         const breakdown = getEmployeeProjectPaymentBreakdown(p, employee.id);
         totalEarnings += breakdown.due;
         pendingEarnings += breakdown.remaining;
         paidEarnings += breakdown.paid;
+        if (p.status === 'Delivered' || p.status === 'Pending Payment') {
+          pendingCompletedEarnings += breakdown.remaining;
+        }
       });
       
       const revenue = employeeProjects.reduce((sum, p) => sum + p.price, 0);
       const profit = employeeProjects.reduce((sum, p) => {
         return sum + (p.price - getProjectEmployeePaymentsDue(p));
       }, 0);
-      const isRanukaJayesh = `${employee.firstName} ${employee.lastName}`.toLowerCase() === 'ranuka jayesh';
       
       return {
         ...employee,
@@ -466,12 +673,12 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
         completedProjects: completed,
         totalEarnings,
         pendingEarnings,
+        pendingCompletedEarnings,
         paidEarnings,
         revenue,
         profit,
-        displayValue: isRanukaJayesh ? profit : totalEarnings,
+        displayValue: totalEarnings,
         completionRate: employeeProjects.length > 0 ? (completed / employeeProjects.length) * 100 : 0,
-        isRanukaJayesh,
       };
     }).sort((a, b) => b.displayValue - a.displayValue);
   }, [employees, filteredProjects]);
@@ -536,6 +743,17 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
       }
     });
 
+    // Deduct expenses attributed to each month in the selected year
+    if (typeof selectedYear === 'number') {
+      expenses.forEach(expense => {
+        const iso = expenseAnchorDate(expense);
+        if (!iso) return;
+        const date = new Date(iso + 'T12:00:00');
+        if (date.getFullYear() !== selectedYear) return;
+        months[date.getMonth()].profit -= expense.amount;
+      });
+    }
+
     // Calculate new unique clients per month (excluding previous months)
     const previousMonthsClients = new Set<string>();
     const result: Record<number, {
@@ -573,7 +791,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
     }
 
     return result;
-  }, [annualProjects]);
+  }, [annualProjects, expenses, selectedYear]);
 
   // Calculate yearly data (all years)
   const yearlyChartData = useMemo(() => {
@@ -607,6 +825,22 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
       years[year].projectCount += 1;
       const clientKey = `${project.clientName}|${project.clientUniOrg}`;
       years[year].uniqueClients.add(clientKey);
+    });
+
+    expenses.forEach(expense => {
+      const iso = expenseAnchorDate(expense);
+      if (!iso) return;
+      const year = new Date(iso + 'T12:00:00').getFullYear();
+      if (!years[year]) {
+        years[year] = {
+          revenue: 0,
+          profit: 0,
+          employeePayments: 0,
+          projectCount: 0,
+          uniqueClients: new Set<string>(),
+        };
+      }
+      years[year].profit -= expense.amount;
     });
 
     // Calculate new unique clients per year (excluding previous years)
@@ -645,7 +879,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
     });
 
     return result;
-  }, [projects]);
+  }, [projects, expenses]);
 
   // Calculate daily data for selected month
   const dailyChartData = useMemo(() => {
@@ -1010,6 +1244,199 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
     };
   }, [activeTab, selectedYear, selectedMonth, monthlyChartData, chartPeriod, dailyChartData, yearlyChartData]);
 
+  // Monthly Comparison Trends chart (single metric MoM %)
+  useEffect(() => {
+    if (comparisonViewMode !== 'chart') {
+      if (comparisonChartInstanceRef.current) {
+        comparisonChartInstanceRef.current.destroy();
+        comparisonChartInstanceRef.current = null;
+      }
+      return;
+    }
+
+    if (!comparisonChartRef.current || analyticsComparison.length === 0) {
+      if (comparisonChartInstanceRef.current) {
+        comparisonChartInstanceRef.current.destroy();
+        comparisonChartInstanceRef.current = null;
+      }
+      return;
+    }
+
+    const metric = COMPARISON_METRICS.find((m) => m.id === comparisonMetric) ?? COMPARISON_METRICS[0];
+    const sorted = [...analyticsComparison].sort((a, b) =>
+      a.year !== b.year ? a.year - b.year : a.month - b.month
+    );
+
+    const labels = sorted.map((record) =>
+      new Date(record.year, record.month - 1).toLocaleDateString('en-US', {
+        month: 'short',
+        year: '2-digit',
+      })
+    );
+
+    const values = sorted.map((r) => r[metric.field] as number | null);
+    const barColors = values.map((v) => {
+      if (v === null || v === undefined) return 'rgba(246, 233, 233, 0.2)';
+      const isGood = metric.inverted ? v <= 0 : v >= 0;
+      return isGood ? 'rgba(52, 211, 153, 0.85)' : 'rgba(248, 113, 113, 0.85)';
+    });
+    const borderColors = values.map((v) => {
+      if (v === null || v === undefined) return 'rgba(246, 233, 233, 0.35)';
+      const isGood = metric.inverted ? v <= 0 : v >= 0;
+      return isGood ? '#34d399' : '#f87171';
+    });
+
+    const dataset = {
+      label: `${metric.label} MoM %`,
+      data: values,
+      backgroundColor: barColors,
+      borderColor: borderColors,
+      borderWidth: 1.5,
+      borderRadius: 6,
+      borderSkipped: false as const,
+      maxBarThickness: 48,
+    };
+
+    const zeroLinePlugin = {
+      id: 'comparisonZeroLine',
+      afterDraw(chart: Chart) {
+        const yScale = chart.scales.y;
+        if (!yScale) return;
+        const y = yScale.getPixelForValue(0);
+        const { ctx, chartArea } = chart;
+        if (y < chartArea.top || y > chartArea.bottom) return;
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(chartArea.left, y);
+        ctx.lineTo(chartArea.right, y);
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = 'rgba(246, 233, 233, 0.45)';
+        ctx.setLineDash([6, 4]);
+        ctx.stroke();
+        ctx.restore();
+      },
+    };
+
+    if (comparisonChartInstanceRef.current) {
+      comparisonChartInstanceRef.current.destroy();
+      comparisonChartInstanceRef.current = null;
+    }
+
+    const ctx = comparisonChartRef.current.getContext('2d');
+    if (!ctx) return;
+
+    comparisonChartInstanceRef.current = new Chart(ctx, {
+      type: 'bar',
+      data: { labels, datasets: [dataset] },
+      plugins: [zeroLinePlugin],
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: {
+          duration: 450,
+          easing: 'easeOutQuart',
+        },
+        interaction: {
+          mode: 'index',
+          intersect: false,
+        },
+        onHover: (event, elements) => {
+          const target = event.native?.target as HTMLElement | null | undefined;
+          if (target) target.style.cursor = elements.length ? 'pointer' : 'default';
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: 'rgba(39, 33, 33, 0.96)',
+            titleColor: '#F6E9E9',
+            bodyColor: '#F6E9E9',
+            borderColor: '#E16428',
+            borderWidth: 1,
+            padding: 12,
+            cornerRadius: 8,
+            displayColors: false,
+            callbacks: {
+              title: (items) => {
+                const idx = items[0]?.dataIndex ?? 0;
+                const record = sorted[idx];
+                if (!record) return '';
+                return new Date(record.year, record.month - 1).toLocaleDateString('en-US', {
+                  month: 'long',
+                  year: 'numeric',
+                });
+              },
+              label: (context) => {
+                const value = context.parsed.y;
+                if (value === null || value === undefined) return `${metric.label}: N/A`;
+                const sign = value >= 0 ? '+' : '';
+                const direction = value > 0 ? 'up' : value < 0 ? 'down' : 'flat';
+                return `${metric.label}: ${sign}${value.toFixed(1)}% (${direction} vs prior month)`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            ticks: {
+              color: '#F6E9E9',
+              font: { family: 'Inter', size: 11, weight: 'bold' as const },
+              maxRotation: 0,
+              autoSkip: true,
+            },
+            grid: { display: false },
+          },
+          y: {
+            grace: '8%',
+            ticks: {
+              color: '#F6E9E9',
+              font: { family: 'Inter', size: 11 },
+              callback: function (value) {
+                const n = Number(value);
+                const sign = n > 0 ? '+' : '';
+                return `${sign}${n}%`;
+              },
+            },
+            grid: {
+              color: (ctx) =>
+                ctx.tick.value === 0 ? 'rgba(246, 233, 233, 0.35)' : 'rgba(246, 233, 233, 0.08)',
+            },
+          },
+        },
+      },
+    });
+
+    return () => {
+      if (comparisonChartInstanceRef.current) {
+        comparisonChartInstanceRef.current.destroy();
+        comparisonChartInstanceRef.current = null;
+      }
+    };
+  }, [comparisonViewMode, comparisonMetric, analyticsComparison]);
+
+  const comparisonChartSummary = useMemo(() => {
+    if (analyticsComparison.length === 0) return null;
+    const metric = COMPARISON_METRICS.find((m) => m.id === comparisonMetric) ?? COMPARISON_METRICS[0];
+    const sorted = [...analyticsComparison].sort((a, b) =>
+      a.year !== b.year ? a.year - b.year : a.month - b.month
+    );
+    const withValues = sorted
+      .map((r) => ({
+        record: r,
+        value: r[metric.field] as number | null,
+        label: new Date(r.year, r.month - 1).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+      }))
+      .filter((x): x is { record: typeof sorted[0]; value: number; label: string } => x.value !== null && x.value !== undefined);
+
+    if (withValues.length === 0) return null;
+
+    const latest = withValues[withValues.length - 1];
+    const best = withValues.reduce((a, b) => (metric.inverted ? (b.value < a.value ? b : a) : b.value > a.value ? b : a));
+    const worst = withValues.reduce((a, b) => (metric.inverted ? (b.value > a.value ? b : a) : b.value < a.value ? b : a));
+    const avg = withValues.reduce((sum, x) => sum + x.value, 0) / withValues.length;
+
+    return { metric, latest, best, worst, avg };
+  }, [analyticsComparison, comparisonMetric]);
+
   // Admin authentication function
   const authenticateAdmin = async (password: string) => {
     try {
@@ -1236,7 +1663,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
   };
 
   return (
-    <div className="space-y-8 animate-fadeIn">
+    <div className="space-y-8 animate-fadeIn pb-24">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 min-w-0">
         <h1 className="text-xl sm:text-3xl font-bold text-[#F6E9E9] font-['Playfair_Display'] shrink-0">
           Analytics & Reports
@@ -1295,6 +1722,9 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
                   {profitChange.toFixed(1)}%
                 </p>
               )}
+              <p className="text-[10px] mt-1 font-['Inter'] text-[#F6E9E9]/40">
+                After emp. pay & expenses
+              </p>
             </div>
             <div className="p-2 sm:p-3 rounded-full bg-blue-500/20">
               <TrendingUp className="w-5 h-5 sm:w-6 sm:h-6 text-blue-300" />
@@ -1390,17 +1820,74 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
           </div>
         </GlassCard>
 
-        <GlassCard className="p-4 sm:p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-[#F6E9E9]/70 text-sm font-['Inter']">Active Employees</p>
-              <p className="text-xl sm:text-2xl font-bold text-[#F6E9E9] mt-1 font-['Poppins']">
-                {employees.filter(e => e.isActive !== false).length}
-              </p>
-            </div>
-            <div className="p-2 sm:p-3 rounded-full bg-orange-500/20">
-              <Users className="w-5 h-5 sm:w-6 sm:h-6 text-orange-300" />
-            </div>
+        <GlassCard
+          className="p-4 sm:p-6 cursor-pointer relative overflow-hidden hover:scale-[1.01] transition-transform duration-300"
+          onClick={() => setExpensesCardSlide(prev => (prev + 1) % 3)}
+        >
+          <div className="relative min-h-[88px]">
+            {[
+              {
+                title: 'Total Expenses',
+                value: totalPeriodExpenses,
+                change: expensesChange,
+                icon: Wallet,
+                iconBg: 'bg-orange-500/20',
+                iconClass: 'text-orange-300',
+                valueClass: 'text-[#F6E9E9]',
+              },
+              {
+                title: 'One-time Expenses',
+                value: oneTimeExpenses,
+                change: oneTimeExpensesChange,
+                icon: Receipt,
+                iconBg: 'bg-purple-500/20',
+                iconClass: 'text-purple-300',
+                valueClass: 'text-purple-300',
+              },
+              {
+                title: 'Subscription Expenses',
+                value: subscriptionExpenses,
+                change: subscriptionExpensesChange,
+                icon: Repeat,
+                iconBg: 'bg-sky-500/20',
+                iconClass: 'text-sky-300',
+                valueClass: 'text-sky-300',
+              },
+            ].map((slide, idx) => {
+              const Icon = slide.icon;
+              return (
+                <div
+                  key={slide.title}
+                  className={`flex items-center justify-between transition-all duration-500 ease-in-out ${
+                    expensesCardSlide === idx
+                      ? 'opacity-100 translate-y-0 relative'
+                      : 'opacity-0 absolute inset-0 translate-y-3 pointer-events-none'
+                  }`}
+                >
+                  <div>
+                    <p className="text-[#F6E9E9]/70 text-sm font-['Inter']">{slide.title}</p>
+                    <p
+                      className={`text-xl sm:text-2xl font-bold mt-1 font-['Poppins'] ${slide.valueClass}`}
+                    >
+                      LKR {slide.value.toLocaleString()}
+                    </p>
+                    {slide.change !== null && (
+                      <p
+                        className={`text-xs mt-1 font-['Inter'] ${
+                          slide.change <= 0 ? 'text-emerald-400' : 'text-red-400'
+                        }`}
+                      >
+                        {slide.change >= 0 ? '+' : ''}
+                        {slide.change.toFixed(1)}%
+                      </p>
+                    )}
+                  </div>
+                  <div className={`p-2 sm:p-3 rounded-full ${slide.iconBg}`}>
+                    <Icon className={`w-5 h-5 sm:w-6 sm:h-6 ${slide.iconClass}`} />
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </GlassCard>
 
@@ -1476,12 +1963,14 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
                 <th className="text-left text-[#F6E9E9]/70 font-medium pb-2 sm:pb-3 px-1 text-xs sm:text-sm font-['Inter']">Projects</th>
                 <th className="text-left text-[#F6E9E9]/70 font-medium pb-2 sm:pb-3 px-1 text-xs sm:text-sm font-['Inter']">Completed</th>
                 <th className="text-left text-[#F6E9E9]/70 font-medium pb-2 sm:pb-3 px-1 text-xs sm:text-sm font-['Inter']">Revenue</th>
+                <th className="text-left text-[#F6E9E9]/70 font-medium pb-2 sm:pb-3 px-1 text-xs sm:text-sm font-['Inter']">Emp. Salary</th>
+                <th className="text-left text-[#F6E9E9]/70 font-medium pb-2 sm:pb-3 px-1 text-xs sm:text-sm font-['Inter']">Expenses</th>
                 <th className="text-left text-[#F6E9E9]/70 font-medium pb-2 sm:pb-3 px-1 text-xs sm:text-sm font-['Inter']">Profit</th>
               </tr>
             </thead>
             <tbody>
               {monthlyData.length > 0 ? (
-                monthlyData.map((month: any) => (
+                monthlyData.map((month: MonthlyData) => (
                 <tr key={month.month} className="border-b border-[#E16428]/10 text-xs sm:text-sm">
                   <td className="py-2 sm:py-3 px-1 text-[#F6E9E9] font-['Inter'] whitespace-nowrap">
                     {new Date(month.month + '-01').toLocaleDateString('en-US', { 
@@ -1494,14 +1983,22 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
                   <td className="py-2 sm:py-3 px-1 text-[#E16428] font-bold font-['Inter']">
                     LKR {month.revenue.toLocaleString()}
                   </td>
+                  <td className="py-2 sm:py-3 px-1 text-yellow-300 font-bold font-['Inter']">
+                    LKR {(month.employeePayments || 0).toLocaleString()}
+                  </td>
+                  <td className="py-2 sm:py-3 px-1 text-orange-300 font-bold font-['Inter']">
+                    LKR {(month.expenses || 0).toLocaleString()}
+                  </td>
                   <td className="py-2 sm:py-3 px-1 text-green-300 font-bold font-['Inter']">
-                    LKR {(month.revenue - month.employeePayments).toLocaleString()}
+                    LKR {(
+                      month.revenue - month.employeePayments - (month.expenses || 0)
+                    ).toLocaleString()}
                   </td>
                 </tr>
                 ))
               ) : (
                 <tr>
-                  <td colSpan={5} className="py-8 text-center text-[#F6E9E9]/70 font-['Inter']">
+                  <td colSpan={7} className="py-8 text-center text-[#F6E9E9]/70 font-['Inter']">
                     No projects found for the selected month and year
                   </td>
                 </tr>
@@ -1533,20 +2030,16 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
                 </div>
                 <div className="text-right">
                   <p className="text-[#E16428] font-bold text-sm sm:text-base">
-                    {employee.isRanukaJayesh ? (
-                      <>LKR {(employee.profit ?? employee.displayValue).toLocaleString()}</>
-                    ) : (
-                      <span className="inline-flex items-baseline gap-1 flex-wrap justify-end">
-                        <span className="text-yellow-400">LKR {(employee.pendingEarnings || 0).toLocaleString()}</span>
-                        <span className="text-[#F6E9E9]/40 font-normal">/</span>
-                        <span>LKR {employee.totalEarnings.toLocaleString()}</span>
+                    <span className="inline-flex items-baseline gap-1 flex-wrap justify-end">
+                      <span className="text-yellow-400">
+                        LKR {(employee.pendingCompletedEarnings || 0).toLocaleString()}
                       </span>
-                    )}
+                      <span className="text-[#F6E9E9]/40 font-normal">/</span>
+                      <span>LKR {employee.totalEarnings.toLocaleString()}</span>
+                    </span>
                   </p>
                   <p className="text-[#F6E9E9]/70 text-xs sm:text-sm">
-                    {employee.isRanukaJayesh
-                      ? `${employee.completionRate.toFixed(1)}% success · profit`
-                      : `${employee.completionRate.toFixed(1)}% · pending / total`}
+                    {employee.completionRate.toFixed(1)}% · completed pending / total
                   </p>
                 </div>
               </div>
@@ -2020,241 +2513,367 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
         </div>
       </GlassCard>
 
-      {/* Analytics Comparison Table */}
-      {analyticsComparison.length > 0 && (
-        <GlassCard className="p-4 sm:p-6">
-          <h2 className="text-lg sm:text-xl font-semibold text-[#F6E9E9] mb-4 sm:mb-6 font-['Poppins']">
-            Monthly Comparison Trends
-          </h2>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-[#E16428]/20">
-                  <th className="text-left text-[#F6E9E9]/70 font-medium pb-2 sm:pb-3 px-2 text-xs sm:text-sm font-['Inter']">Month/Year</th>
-                  <th className="text-left text-[#F6E9E9]/70 font-medium pb-2 sm:pb-3 px-2 text-xs sm:text-sm font-['Inter']">Revenue</th>
-                  <th className="text-left text-[#F6E9E9]/70 font-medium pb-2 sm:pb-3 px-2 text-xs sm:text-sm font-['Inter']">Profit</th>
-                  <th className="text-left text-[#F6E9E9]/70 font-medium pb-2 sm:pb-3 px-2 text-xs sm:text-sm font-['Inter']">Profit Margin</th>
-                  <th className="text-left text-[#F6E9E9]/70 font-medium pb-2 sm:pb-3 px-2 text-xs sm:text-sm font-['Inter']">Emp. Payments</th>
-                  <th className="text-left text-[#F6E9E9]/70 font-medium pb-2 sm:pb-3 px-2 text-xs sm:text-sm font-['Inter']">Unique Clients</th>
-                </tr>
-              </thead>
-              <tbody>
-                {analyticsComparison.map((record) => {
-                  const monthName = new Date(record.year, record.month - 1).toLocaleDateString('en-US', { 
-                    month: 'short', 
-                    year: 'numeric' 
-                  });
-                  
-                  const formatPercentage = (value: number | null) => {
-                    if (value === null) return 'N/A';
-                    const sign = value >= 0 ? '+' : '';
-                    return `${sign}${value.toFixed(1)}%`;
-                  };
-
-                  const getPercentageColor = (value: number | null, isInverted: boolean = false) => {
-                    if (value === null) return 'text-[#F6E9E9]/50';
-                    const isPositive = value >= 0;
-                    const shouldBeGreen = isInverted ? !isPositive : isPositive;
-                    return shouldBeGreen ? 'text-emerald-400' : 'text-red-400';
-                  };
-
-                  return (
-                    <tr key={`${record.year}-${record.month}`} className="border-b border-[#E16428]/10 text-xs sm:text-sm">
-                      <td className="py-2 sm:py-3 px-2 text-[#F6E9E9] font-['Inter'] whitespace-nowrap">
-                        {monthName}
-                      </td>
-                      <td className={`py-2 sm:py-3 px-2 font-bold font-['Inter'] ${getPercentageColor(record.revenue_change_percentage)}`}>
-                        {formatPercentage(record.revenue_change_percentage)}
-                      </td>
-                      <td className={`py-2 sm:py-3 px-2 font-bold font-['Inter'] ${getPercentageColor(record.profit_change_percentage)}`}>
-                        {formatPercentage(record.profit_change_percentage)}
-                      </td>
-                      <td className={`py-2 sm:py-3 px-2 font-bold font-['Inter'] ${getPercentageColor(record.profit_margin_change_percentage)}`}>
-                        {formatPercentage(record.profit_margin_change_percentage)}
-                      </td>
-                      <td className={`py-2 sm:py-3 px-2 font-bold font-['Inter'] ${getPercentageColor(record.employee_payments_change_percentage, true)}`}>
-                        {formatPercentage(record.employee_payments_change_percentage)}
-                      </td>
-                      <td className={`py-2 sm:py-3 px-2 font-bold font-['Inter'] ${getPercentageColor(record.unique_clients_change_percentage)}`}>
-                        {formatPercentage(record.unique_clients_change_percentage)}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </GlassCard>
-      )}
-
-      <div className="flex justify-center sm:justify-between items-center mb-6">
-        {/* Mobile: Curved bottom-right menu */}
-        <div className="sm:hidden">
-          {/* Floating Action Button */}
-          <button
-            onClick={() => setMobileActionsDropdownOpen(!mobileActionsDropdownOpen)}
-            className={`fixed bottom-6 right-6 z-40 w-14 h-14 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white rounded-full shadow-2xl flex items-center justify-center transition-all duration-500 ease-out hover:scale-110 active:scale-95 ${
-              mobileActionsDropdownOpen ? 'rotate-45 scale-110' : 'rotate-0 scale-100'
-            }`}
-          >
-            <div className={`transition-all duration-300 ease-in-out ${
-              mobileActionsDropdownOpen ? 'rotate-0 opacity-100' : 'rotate-90 opacity-100'
-            }`}>
-              {mobileActionsDropdownOpen ? (
-                <X className="w-6 h-6" />
-              ) : (
-                <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
+      {/* Analytics Comparison Chart/Table */}
+      <GlassCard className="p-4 sm:p-6">
+        <div className="mb-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
+            <h2 className="text-lg sm:text-xl font-semibold text-[#F6E9E9] font-['Poppins']">
+              Monthly Comparison Trends
+              {selectedYear !== 'all' && (
+                <span className="ml-2 text-sm font-normal text-[#F6E9E9]/45 font-['Inter']">
+                  · {selectedYear}
+                </span>
               )}
-            </div>
-          </button>
+            </h2>
 
-          {/* Curved Menu Overlay */}
-          {mobileActionsDropdownOpen && (
-            <>
-              <div 
-                className="fixed inset-0 bg-black/30 z-30 animate-fadeIn backdrop-blur-sm"
-                onClick={() => setMobileActionsDropdownOpen(false)}
-                style={{
-                  animation: 'fadeIn 0.3s ease-out'
-                }}
-              />
-              <div 
-                className="fixed bottom-0 right-0 z-40 w-72 h-auto bg-transparent rounded-tl-[3rem] rounded-tr-none rounded-br-none shadow-2xl overflow-hidden"
-                style={{
-                  animation: 'slideUpFade 0.4s cubic-bezier(0.16, 1, 0.3, 1)'
-                }}
-              >
-                {/* Orange Section - Generate Report */}
-                <div 
-                  className="bg-gradient-to-br from-[#E16428]/70 to-[#E16428]/60 backdrop-blur-md p-3 border border-white/10"
-                  style={{
-                    animation: 'slideInLeft 0.5s cubic-bezier(0.16, 1, 0.3, 1) 0.1s both'
-                  }}
-                >
-                  <button
-                    onClick={() => {
-                      setShowReport(true);
-                      setMobileActionsDropdownOpen(false);
-                    }}
-                    className="w-full flex items-center gap-3 px-3 py-1.5 text-white hover:bg-white/10 rounded-xl transition-all duration-300 ease-out active:scale-95 transform hover:translate-x-1"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 transition-transform duration-300 group-hover:scale-110" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                    </svg>
-                    <span className="font-['Poppins'] font-semibold text-sm">Generate Report</span>
-                  </button>
+            {/* Mobile dropdowns */}
+            <div className="flex flex-col gap-3 sm:hidden w-full">
+              <div className="flex gap-3 w-full">
+                {comparisonViewMode === 'chart' && (
+                  <div className="flex flex-col gap-2 w-1/2 relative">
+                    <label className="text-xs text-[#F6E9E9]/70 font-['Inter'] font-medium">Metric</label>
+                    <div className="relative">
+                      <button
+                        onClick={() => setComparisonMetricDropdownOpen(!comparisonMetricDropdownOpen)}
+                        className="w-full px-3 py-2 rounded-lg font-['Inter'] text-sm bg-[#272121]/50 border border-[#E16428]/30 text-[#F6E9E9] focus:outline-none focus:border-[#E16428] transition-all duration-200 flex items-center justify-between"
+                      >
+                        <span className="truncate">
+                          {COMPARISON_METRICS.find((m) => m.id === comparisonMetric)?.shortLabel ?? 'Revenue'}
+                        </span>
+                        <ChevronDown className={`w-4 h-4 shrink-0 transition-transform duration-200 ${comparisonMetricDropdownOpen ? 'rotate-180' : ''}`} />
+                      </button>
+                      {comparisonMetricDropdownOpen && (
+                        <>
+                          <div className="fixed inset-0 z-10" onClick={() => setComparisonMetricDropdownOpen(false)} />
+                          <div className="absolute z-20 mt-1 w-full bg-[#272121] border border-[#E16428]/30 rounded-lg shadow-lg overflow-hidden max-h-64 overflow-y-auto">
+                            {COMPARISON_METRICS.map((m) => (
+                              <button
+                                key={m.id}
+                                onClick={() => {
+                                  setComparisonMetric(m.id);
+                                  setComparisonMetricDropdownOpen(false);
+                                }}
+                                className={`w-full px-3 py-2 text-left text-sm font-['Inter'] transition-colors ${
+                                  comparisonMetric === m.id
+                                    ? 'bg-[#E16428]/20 text-[#E16428]'
+                                    : 'text-[#F6E9E9] hover:bg-[#E16428]/15'
+                                }`}
+                              >
+                                {m.label}
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+                <div className={`flex flex-col gap-2 relative ${comparisonViewMode === 'chart' ? 'w-1/2' : 'w-full'}`}>
+                  <label className="text-xs text-[#F6E9E9]/70 font-['Inter'] font-medium">View</label>
+                  <div className="relative">
+                    <button
+                      onClick={() => setComparisonViewDropdownOpen(!comparisonViewDropdownOpen)}
+                      className="w-full px-3 py-2 rounded-lg font-['Inter'] text-sm bg-[#272121]/50 border border-[#E16428]/30 text-[#F6E9E9] focus:outline-none focus:border-[#E16428] transition-all duration-200 flex items-center justify-between"
+                    >
+                      <div className="flex items-center gap-2">
+                        {comparisonViewMode === 'chart' ? <BarChart className="w-4 h-4" /> : <TableIcon className="w-4 h-4" />}
+                        <span>{comparisonViewMode === 'chart' ? 'Chart' : 'Table'}</span>
+                      </div>
+                      <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${comparisonViewDropdownOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {comparisonViewDropdownOpen && (
+                      <>
+                        <div className="fixed inset-0 z-10" onClick={() => setComparisonViewDropdownOpen(false)} />
+                        <div className="absolute z-20 mt-1 w-full bg-[#272121] border border-[#E16428]/30 rounded-lg shadow-lg overflow-hidden">
+                          <button
+                            onClick={() => {
+                              setComparisonViewMode('chart');
+                              setComparisonViewDropdownOpen(false);
+                            }}
+                            className="w-full px-4 py-2 text-left flex items-center gap-2 text-[#F6E9E9] hover:bg-[#E16428]/20 transition-colors"
+                          >
+                            <BarChart className="w-4 h-4" />
+                            <span>Chart</span>
+                          </button>
+                          <button
+                            onClick={() => {
+                              setComparisonViewMode('table');
+                              setComparisonViewDropdownOpen(false);
+                            }}
+                            className="w-full px-4 py-2 text-left flex items-center gap-2 text-[#F6E9E9] hover:bg-[#E16428]/20 transition-colors"
+                          >
+                            <TableIcon className="w-4 h-4" />
+                            <span>Table</span>
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
-                
-                {/* Green Section - Export Excel */}
-                <div 
-                  className="bg-gradient-to-br from-green-500/70 to-green-600/60 backdrop-blur-md p-3 border border-white/10"
-                  style={{
-                    animation: 'slideInLeft 0.5s cubic-bezier(0.16, 1, 0.3, 1) 0.2s both'
-                  }}
-                >
+              </div>
+            </div>
+
+            {/* Desktop Chart / Table toggle */}
+            <div className="hidden sm:flex sm:flex-row gap-4">
+              <div className="flex flex-col gap-2">
+                <label className="text-xs text-[#F6E9E9]/70 font-['Inter'] font-medium">View</label>
+                <div className="flex gap-3">
                   <button
-                    onClick={() => {
-                      handleExportClick();
-                      setMobileActionsDropdownOpen(false);
-                    }}
-                    disabled={filteredProjects.length === 0}
-                    className="w-full flex items-center gap-3 px-3 py-1.5 text-white hover:bg-white/10 rounded-xl transition-all duration-300 ease-out active:scale-95 transform hover:translate-x-1 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-x-0"
+                    type="button"
+                    onClick={() => setComparisonViewMode('chart')}
+                    className={`px-1 pb-2 border-0 border-b-2 rounded-none bg-transparent font-['Inter'] text-sm transition-colors duration-200 flex items-center gap-2 ${
+                      comparisonViewMode === 'chart'
+                        ? 'border-[#E16428] text-[#E16428]'
+                        : 'border-transparent text-[#F6E9E9]/55 hover:text-[#E16428]/80 hover:border-[#E16428]/40'
+                    }`}
                   >
-                    <Download className="w-5 h-5 transition-transform duration-300 group-hover:scale-110" />
-                    <span className="font-['Poppins'] font-semibold text-sm">
-                      {filteredProjects.length === 0 ? 'No Data to Export' : 'Export Excel'}
-                    </span>
+                    <BarChart className="w-4 h-4" />
+                    <span>Chart</span>
                   </button>
-                </div>
-                
-                {/* Close button */}
-                <div 
-                  className="absolute top-4 right-4"
-                  style={{
-                    animation: 'scaleIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) 0.3s both'
-                  }}
-                >
                   <button
-                    onClick={() => setMobileActionsDropdownOpen(false)}
-                    className="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-lg hover:scale-110 transition-all duration-300 ease-out active:scale-95"
+                    type="button"
+                    onClick={() => setComparisonViewMode('table')}
+                    className={`px-1 pb-2 border-0 border-b-2 rounded-none bg-transparent font-['Inter'] text-sm transition-colors duration-200 flex items-center gap-2 ${
+                      comparisonViewMode === 'table'
+                        ? 'border-[#E16428] text-[#E16428]'
+                        : 'border-transparent text-[#F6E9E9]/55 hover:text-[#E16428]/80 hover:border-[#E16428]/40'
+                    }`}
                   >
-                    <X className="w-5 h-5 text-[#E16428] transition-transform duration-300 hover:rotate-90" />
+                    <TableIcon className="w-4 h-4" />
+                    <span>Table</span>
                   </button>
                 </div>
               </div>
-            </>
+            </div>
+          </div>
+
+          {/* Desktop metric toggles (chart only) */}
+          {comparisonViewMode === 'chart' && (
+            <div className="hidden sm:flex sm:flex-col gap-2 mb-4">
+              <label className="text-xs text-[#F6E9E9]/70 font-['Inter'] font-medium">Metric</label>
+              <div className="flex flex-wrap gap-3">
+                {COMPARISON_METRICS.map((m) => {
+                  const active = comparisonMetric === m.id;
+                  const Icon =
+                    m.id === 'revenue' ? DollarSign
+                    : m.id === 'profit' ? TrendingUp
+                    : m.id === 'profitMargin' ? Percent
+                    : m.id === 'employeePayments' ? Users
+                    : m.id === 'expenses' ? Receipt
+                    : Users;
+                  const activeClass =
+                    m.id === 'revenue' ? 'border-[#E16428] text-[#E16428]'
+                    : m.id === 'profit' ? 'border-emerald-500 text-emerald-400'
+                    : m.id === 'profitMargin' ? 'border-violet-500 text-violet-400'
+                    : m.id === 'employeePayments' ? 'border-blue-500 text-blue-400'
+                    : m.id === 'expenses' ? 'border-pink-500 text-pink-400'
+                    : 'border-amber-500 text-amber-400';
+                  const idleHover =
+                    m.id === 'revenue' ? 'hover:text-[#E16428]/80 hover:border-[#E16428]/40'
+                    : m.id === 'profit' ? 'hover:text-emerald-400/80 hover:border-emerald-500/40'
+                    : m.id === 'profitMargin' ? 'hover:text-violet-400/80 hover:border-violet-500/40'
+                    : m.id === 'employeePayments' ? 'hover:text-blue-400/80 hover:border-blue-500/40'
+                    : m.id === 'expenses' ? 'hover:text-pink-400/80 hover:border-pink-500/40'
+                    : 'hover:text-amber-400/80 hover:border-amber-500/40';
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => setComparisonMetric(m.id)}
+                      className={`px-1 pb-2 border-0 border-b-2 rounded-none bg-transparent font-['Inter'] text-sm transition-colors duration-200 flex items-center gap-2 ${
+                        active
+                          ? activeClass
+                          : `border-transparent text-[#F6E9E9]/55 ${idleHover}`
+                      }`}
+                    >
+                      <Icon className="w-4 h-4" />
+                      <span>{m.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           )}
         </div>
-        
-        <style>{`
-          @keyframes fadeIn {
-            from {
-              opacity: 0;
-            }
-            to {
-              opacity: 1;
-            }
-          }
-          
-          @keyframes slideUpFade {
-            from {
-              opacity: 0;
-              transform: translateY(20px) scale(0.95);
-            }
-            to {
-              opacity: 1;
-              transform: translateY(0) scale(1);
-            }
-          }
-          
-          @keyframes slideInLeft {
-            from {
-              opacity: 0;
-              transform: translateX(30px);
-            }
-            to {
-              opacity: 1;
-              transform: translateX(0);
-            }
-          }
-          
-          @keyframes scaleIn {
-            from {
-              opacity: 0;
-              transform: scale(0);
-            }
-            to {
-              opacity: 1;
-              transform: scale(1);
-            }
-          }
-        `}</style>
 
-        {/* Desktop: Separate buttons */}
-        <div className="hidden sm:flex flex-row gap-3 sm:gap-4">
-          <button
-            onClick={() => setShowReport(true)}
-            className="flex items-center gap-2 px-6 sm:px-7 py-2 sm:py-3 bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white rounded-full shadow-xl font-['Poppins'] font-bold text-sm sm:text-lg transition-all duration-200 hover:scale-105 hover:shadow-2xl active:scale-95 border-2 border-[#E16428]/40 focus:outline-none focus:ring-2 focus:ring-[#E16428]/40"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 sm:w-6 sm:h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-            <span className="tracking-wide">Generate Report</span>
-          </button>
-          
-          <button
-            onClick={handleExportClick}
-            disabled={filteredProjects.length === 0}
-            className="flex items-center gap-2 px-6 sm:px-7 py-2 sm:py-3 bg-gradient-to-r from-green-600 to-green-700 text-white rounded-full shadow-xl font-['Poppins'] font-bold text-sm sm:text-lg transition-all duration-200 hover:scale-105 hover:shadow-2xl active:scale-95 border-2 border-green-500/40 focus:outline-none focus:ring-2 focus:ring-green-500/40 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
-          >
-            <Download className="w-5 h-5 sm:w-6 sm:h-6" />
-            <span className="tracking-wide">
-              {filteredProjects.length === 0 ? 'No Data to Export' : 'Export Excel'}
-            </span>
-          </button>
-        </div>
-        <div className="hidden sm:block" />
-      </div>
+        {comparisonViewMode === 'chart' ? (
+          analyticsComparison.length > 0 ? (
+            <div className="space-y-4">
+              {comparisonChartSummary && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {[
+                    {
+                      label: 'Latest',
+                      value: comparisonChartSummary.latest.value,
+                      sub: comparisonChartSummary.latest.label,
+                    },
+                    {
+                      label: 'Average',
+                      value: comparisonChartSummary.avg,
+                      sub: 'All months',
+                    },
+                    {
+                      label: comparisonChartSummary.metric.inverted ? 'Best (lowest)' : 'Best',
+                      value: comparisonChartSummary.best.value,
+                      sub: comparisonChartSummary.best.label,
+                    },
+                    {
+                      label: comparisonChartSummary.metric.inverted ? 'Worst (highest)' : 'Worst',
+                      value: comparisonChartSummary.worst.value,
+                      sub: comparisonChartSummary.worst.label,
+                    },
+                  ].map((stat) => {
+                    const inverted = comparisonChartSummary.metric.inverted;
+                    const isGood = inverted ? stat.value <= 0 : stat.value >= 0;
+                    const sign = stat.value >= 0 ? '+' : '';
+                    return (
+                      <div
+                        key={stat.label}
+                        className="rounded-lg border border-[#E16428]/15 bg-[#272121]/35 px-3 py-2.5"
+                      >
+                        <p className="text-[10px] uppercase tracking-wide text-[#F6E9E9]/45 font-['Inter'] mb-1">
+                          {stat.label}
+                        </p>
+                        <p className={`text-base sm:text-lg font-semibold font-['Inter'] ${isGood ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {sign}{stat.value.toFixed(1)}%
+                        </p>
+                        <p className="text-xs text-[#F6E9E9]/45 font-['Inter'] mt-0.5">{stat.sub}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div className="flex items-center gap-4 text-xs font-['Inter'] text-[#F6E9E9]/50">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="inline-block w-2.5 h-2.5 rounded-sm bg-emerald-400" />
+                  {COMPARISON_METRICS.find((m) => m.id === comparisonMetric)?.inverted
+                    ? 'Decrease (good)'
+                    : 'Increase (good)'}
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="inline-block w-2.5 h-2.5 rounded-sm bg-red-400" />
+                  {COMPARISON_METRICS.find((m) => m.id === comparisonMetric)?.inverted
+                    ? 'Increase (bad)'
+                    : 'Decrease (bad)'}
+                </span>
+                <span className="hidden sm:inline text-[#F6E9E9]/35">· Hover bars for details</span>
+              </div>
+
+              <div className="h-64 sm:h-80 w-full">
+                <canvas ref={comparisonChartRef} className="w-full h-full"></canvas>
+              </div>
+            </div>
+          ) : (
+            <p className="py-8 text-center text-[#F6E9E9]/50 text-sm font-['Inter']">
+              {selectedYear !== 'all'
+                ? `No comparison data for ${selectedYear}. Export a report for that year to record trends.`
+                : 'No comparison data yet. Export a monthly report to record trends.'}
+            </p>
+          )
+        ) : (
+          <div className="overflow-x-auto">
+            {analyticsComparison.length > 0 ? (
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-[#E16428]/20">
+                    <th className="text-left text-[#F6E9E9]/70 font-medium pb-2 sm:pb-3 px-2 text-xs sm:text-sm font-['Inter']">Month/Year</th>
+                    <th className="text-left text-[#F6E9E9]/70 font-medium pb-2 sm:pb-3 px-2 text-xs sm:text-sm font-['Inter']">Revenue</th>
+                    <th className="text-left text-[#F6E9E9]/70 font-medium pb-2 sm:pb-3 px-2 text-xs sm:text-sm font-['Inter']">Profit</th>
+                    <th className="text-left text-[#F6E9E9]/70 font-medium pb-2 sm:pb-3 px-2 text-xs sm:text-sm font-['Inter']">Profit Margin</th>
+                    <th className="text-left text-[#F6E9E9]/70 font-medium pb-2 sm:pb-3 px-2 text-xs sm:text-sm font-['Inter']">Emp. Payments</th>
+                    <th className="text-left text-[#F6E9E9]/70 font-medium pb-2 sm:pb-3 px-2 text-xs sm:text-sm font-['Inter']">Expenses</th>
+                    <th className="text-left text-[#F6E9E9]/70 font-medium pb-2 sm:pb-3 px-2 text-xs sm:text-sm font-['Inter']">Unique Clients</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {analyticsComparison.map((record) => {
+                    const monthName = new Date(record.year, record.month - 1).toLocaleDateString('en-US', {
+                      month: 'short',
+                      year: 'numeric',
+                    });
+
+                    const formatPercentage = (value: number | null) => {
+                      if (value === null || value === undefined) return 'N/A';
+                      const sign = value >= 0 ? '+' : '';
+                      return `${sign}${value.toFixed(1)}%`;
+                    };
+
+                    const getPercentageColor = (value: number | null | undefined, isInverted: boolean = false) => {
+                      if (value === null || value === undefined) return 'text-[#F6E9E9]/50';
+                      const isPositive = value >= 0;
+                      const shouldBeGreen = isInverted ? !isPositive : isPositive;
+                      return shouldBeGreen ? 'text-emerald-400' : 'text-red-400';
+                    };
+
+                    return (
+                      <tr key={`${record.year}-${record.month}`} className="border-b border-[#E16428]/10 text-xs sm:text-sm">
+                        <td className="py-2 sm:py-3 px-2 text-[#F6E9E9] font-['Inter'] whitespace-nowrap">
+                          {monthName}
+                        </td>
+                        <td className={`py-2 sm:py-3 px-2 font-bold font-['Inter'] ${getPercentageColor(record.revenue_change_percentage)}`}>
+                          {formatPercentage(record.revenue_change_percentage)}
+                        </td>
+                        <td className={`py-2 sm:py-3 px-2 font-bold font-['Inter'] ${getPercentageColor(record.profit_change_percentage)}`}>
+                          {formatPercentage(record.profit_change_percentage)}
+                        </td>
+                        <td className={`py-2 sm:py-3 px-2 font-bold font-['Inter'] ${getPercentageColor(record.profit_margin_change_percentage)}`}>
+                          {formatPercentage(record.profit_margin_change_percentage)}
+                        </td>
+                        <td className={`py-2 sm:py-3 px-2 font-bold font-['Inter'] ${getPercentageColor(record.employee_payments_change_percentage, true)}`}>
+                          {formatPercentage(record.employee_payments_change_percentage)}
+                        </td>
+                        <td className={`py-2 sm:py-3 px-2 font-bold font-['Inter'] ${getPercentageColor(record.expenses_change_percentage, true)}`}>
+                          {formatPercentage(record.expenses_change_percentage)}
+                        </td>
+                        <td className={`py-2 sm:py-3 px-2 font-bold font-['Inter'] ${getPercentageColor(record.unique_clients_change_percentage)}`}>
+                          {formatPercentage(record.unique_clients_change_percentage)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            ) : (
+              <p className="py-8 text-center text-[#F6E9E9]/50 text-sm font-['Inter']">
+                {selectedYear !== 'all'
+                  ? `No comparison data for ${selectedYear}. Export a report for that year to record trends.`
+                  : 'No comparison data yet. Export a monthly report to record trends.'}
+              </p>
+            )}
+          </div>
+        )}
+      </GlassCard>
+
+      {/* Centered floating actions — pill bar like reference */}
+      {ReactDOM.createPortal(
+        <div className="fixed bottom-5 sm:bottom-7 inset-x-0 z-40 flex justify-center pointer-events-none px-3">
+          <div className="pointer-events-auto flex items-center rounded-full bg-[#272121]/95 backdrop-blur-md border border-[#E16428]/25 shadow-xl shadow-black/40 pl-3.5 pr-1.5 py-1 gap-0.5 animate-fadeIn">
+            <button
+              type="button"
+              onClick={() => setShowReport(true)}
+              className="px-2.5 sm:px-3 py-1.5 text-[#F6E9E9] text-sm font-['Poppins'] font-semibold hover:text-[#E16428] active:scale-95 transition-all"
+              title="Generate Report"
+            >
+              Report
+            </button>
+            <span className="w-px h-4 bg-[#F6E9E9]/15 shrink-0" aria-hidden />
+            <button
+              type="button"
+              onClick={handleExportClick}
+              disabled={filteredProjects.length === 0}
+              className="px-2.5 sm:px-3 py-1.5 text-[#F6E9E9] text-sm font-['Poppins'] font-semibold hover:text-[#E16428] active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-[#F6E9E9]"
+              title={filteredProjects.length === 0 ? 'No data to export' : 'Export Excel'}
+            >
+              Excel
+            </button>
+            <div className="ml-1.5 shrink-0 w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-[#E16428] border-2 border-[#E16428]/80 flex items-center justify-center shadow-md">
+              <Download className="w-4 h-4 text-white" strokeWidth={2.5} />
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
 
       {showReport && (
         <ReportModal

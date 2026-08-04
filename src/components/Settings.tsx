@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { supabase } from '../supabaseClient';
-import { Edit, Trash2, Plus, Save, X, Lock, Layers, MessageSquareText, Mail, Shield } from 'lucide-react';
+import { Edit, Trash2, Plus, Save, X, Lock, Layers, MessageSquareText, Mail, Shield, RotateCcw } from 'lucide-react';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import {
   getLocalProjectTypes,
@@ -80,6 +81,30 @@ export const Settings: React.FC = () => {
   const [emailMsg, setEmailMsg] = useState('');
   const [emailMsgType, setEmailMsgType] = useState<'error' | 'success'>('error');
   const [isChangingEmail, setIsChangingEmail] = useState(false);
+
+  const emailDirty = useMemo(
+    () => Boolean(newEmail.trim() || confirmEmail.trim() || emailPassword.trim()),
+    [newEmail, confirmEmail, emailPassword]
+  );
+
+  const passwordDirty = useMemo(
+    () => Boolean(currentPassword.trim() || newPassword.trim() || confirmPassword.trim()),
+    [currentPassword, newPassword, confirmPassword]
+  );
+
+  const clearEmailDraft = () => {
+    setNewEmail('');
+    setConfirmEmail('');
+    setEmailPassword('');
+    setEmailMsg('');
+  };
+
+  const clearPasswordDraft = () => {
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setPasswordMsg('');
+  };
 
   // Fetch project types
   useEffect(() => {
@@ -460,7 +485,7 @@ export const Settings: React.FC = () => {
   }, [showDeleteModal]);
 
   return (
-    <div className={`${activeTab === 'receipt-caption' ? 'max-w-5xl' : 'max-w-2xl'} mx-auto py-4 sm:py-8 px-2 sm:px-4 animate-fadeIn`}>
+    <div className={`${activeTab === 'receipt-caption' ? 'max-w-5xl' : 'max-w-2xl'} mx-auto pt-4 sm:pt-8 pb-24 px-2 sm:px-4 animate-fadeIn`}>
       {/* Tabs — equal columns on mobile, no horizontal scroll overflow */}
       <div
         role="tablist"
@@ -618,7 +643,7 @@ export const Settings: React.FC = () => {
                         Current: <span className="text-[#F6E9E9]/80">{currentEmail}</span>
                       </p>
                     )}
-                    <form onSubmit={handleChangeEmail} className="space-y-3 max-w-md">
+                    <form id="admin-email-form" onSubmit={handleChangeEmail} className="space-y-3 max-w-md">
                       <input
                         type="email"
                         value={newEmail}
@@ -646,13 +671,6 @@ export const Settings: React.FC = () => {
                         required
                         autoComplete="current-password"
                       />
-                      <button
-                        type="submit"
-                        disabled={isChangingEmail}
-                        className="mt-1 bg-[#E16428] text-white px-4 py-2.5 rounded-lg hover:bg-[#d35400] w-full disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200 flex items-center justify-center text-sm font-medium"
-                      >
-                        {isChangingEmail ? 'Updating…' : 'Update Email'}
-                      </button>
                       {emailMsg && (
                         <div
                           className={`p-3 rounded-lg text-sm font-['Inter'] ${
@@ -673,7 +691,7 @@ export const Settings: React.FC = () => {
                     <h2 className="text-lg sm:text-xl font-bold text-[#F6E9E9] mb-4 font-['Playfair_Display']">
                       Admin Password
                     </h2>
-                    <form onSubmit={handleChangePassword} className="space-y-3 max-w-md">
+                    <form id="admin-password-form" onSubmit={handleChangePassword} className="space-y-3 max-w-md">
                       <input
                         type="password"
                         value={currentPassword}
@@ -698,23 +716,6 @@ export const Settings: React.FC = () => {
                         placeholder="Confirm new password"
                         required
                       />
-                      <button
-                        type="submit"
-                        disabled={isChangingPassword}
-                        className="mt-1 bg-[#E16428] text-white px-4 py-2.5 rounded-lg hover:bg-[#d35400] w-full disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200 flex items-center justify-center text-sm font-medium"
-                      >
-                        {isChangingPassword ? (
-                          <>
-                            <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                            </svg>
-                            Changing...
-                          </>
-                        ) : (
-                          'Change Password'
-                        )}
-                      </button>
                       {passwordMsg && (
                         <div className={`p-3 rounded-lg text-sm font-['Inter'] ${
                           passwordMsgType === 'success'
@@ -765,6 +766,70 @@ export const Settings: React.FC = () => {
           </section>
         )}
       </div>
+
+      {activeTab === 'admin-account' &&
+        adminSubTab === 'email' &&
+        emailDirty &&
+        createPortal(
+          <div className="fixed bottom-5 sm:bottom-7 inset-x-0 z-40 flex justify-center pointer-events-none px-3">
+            <div className="pointer-events-auto flex items-center rounded-full bg-[#272121]/95 backdrop-blur-md border border-[#E16428]/25 shadow-xl shadow-black/40 pl-3.5 pr-1.5 py-1 gap-0.5 animate-fadeIn">
+              <button
+                type="submit"
+                form="admin-email-form"
+                disabled={isChangingEmail}
+                className="px-2.5 sm:px-3 py-1.5 text-[#F6E9E9] text-sm font-['Poppins'] font-semibold hover:text-[#E16428] active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-[#F6E9E9]"
+              >
+                {isChangingEmail ? 'Updating…' : 'Update'}
+              </button>
+              <span className="w-px h-4 bg-[#F6E9E9]/15 shrink-0" aria-hidden />
+              <button
+                type="button"
+                onClick={clearEmailDraft}
+                disabled={isChangingEmail}
+                className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-[#F6E9E9] text-sm font-['Poppins'] font-semibold hover:text-[#E16428] active:scale-95 transition-all disabled:opacity-40"
+              >
+                <RotateCcw className="w-3.5 h-3.5 opacity-70" />
+                Reset
+              </button>
+              <div className="ml-1.5 shrink-0 w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-[#E16428] border-2 border-[#E16428]/80 flex items-center justify-center shadow-md">
+                <Mail className="w-4 h-4 text-white" strokeWidth={2.5} />
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {activeTab === 'admin-account' &&
+        adminSubTab === 'password' &&
+        passwordDirty &&
+        createPortal(
+          <div className="fixed bottom-5 sm:bottom-7 inset-x-0 z-40 flex justify-center pointer-events-none px-3">
+            <div className="pointer-events-auto flex items-center rounded-full bg-[#272121]/95 backdrop-blur-md border border-[#E16428]/25 shadow-xl shadow-black/40 pl-3.5 pr-1.5 py-1 gap-0.5 animate-fadeIn">
+              <button
+                type="submit"
+                form="admin-password-form"
+                disabled={isChangingPassword}
+                className="px-2.5 sm:px-3 py-1.5 text-[#F6E9E9] text-sm font-['Poppins'] font-semibold hover:text-[#E16428] active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-[#F6E9E9]"
+              >
+                {isChangingPassword ? 'Changing…' : 'Update'}
+              </button>
+              <span className="w-px h-4 bg-[#F6E9E9]/15 shrink-0" aria-hidden />
+              <button
+                type="button"
+                onClick={clearPasswordDraft}
+                disabled={isChangingPassword}
+                className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-[#F6E9E9] text-sm font-['Poppins'] font-semibold hover:text-[#E16428] active:scale-95 transition-all disabled:opacity-40"
+              >
+                <RotateCcw className="w-3.5 h-3.5 opacity-70" />
+                Reset
+              </button>
+              <div className="ml-1.5 shrink-0 w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-[#E16428] border-2 border-[#E16428]/80 flex items-center justify-center shadow-md">
+                <Lock className="w-4 h-4 text-white" strokeWidth={2.5} />
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
 
       {showDeleteModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm animate-fadeIn p-4">

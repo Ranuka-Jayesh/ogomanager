@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { Plus, Pencil, Trash2, Mail, Phone, MapPin, ChevronRight } from 'lucide-react';
 import { Employee, Project } from '../types';
 import { EmployeeModal } from './EmployeeModal';
@@ -110,6 +111,16 @@ export const EmployeeManagement: React.FC<EmployeeManagementProps> = ({
     );
   };
 
+  const handleTogglePerformance = async (employee: Employee) => {
+    const next = employee.showInPerformance === false;
+    await updateEmployeeOffline(employee.id, { showInPerformance: next });
+    showNotification(
+      `${employee.firstName} ${employee.lastName} performance view ${next ? 'on' : 'off'}`,
+      'info',
+      { title: 'Manager Pro', icon: '/app.png' }
+    );
+  };
+
   const handleEdit = (employee: Employee) => {
     setEditingEmployee(employee);
     setIsModalOpen(true);
@@ -212,7 +223,7 @@ export const EmployeeManagement: React.FC<EmployeeManagementProps> = ({
   }
 
   return (
-    <div className="space-y-5 sm:space-y-6 animate-fadeIn">
+    <div className="space-y-5 sm:space-y-6 animate-fadeIn pb-24">
       <div className="flex items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold text-[#F6E9E9] font-['Playfair_Display']">
@@ -222,15 +233,6 @@ export const EmployeeManagement: React.FC<EmployeeManagementProps> = ({
             {loading ? 'Loading…' : `${counts.active} active · ${counts.inactive} inactive`}
           </p>
         </div>
-        <button
-          onClick={handleAdd}
-          className="inline-flex items-center gap-2 bg-[#E16428] text-white px-3.5 sm:px-4 py-2 rounded-lg hover:bg-[#E16428]/90 transition-colors font-['Poppins'] text-sm"
-          aria-label="Add Employee (Alt+A)"
-          title="Add New Employee (Alt+A)"
-        >
-          <Plus className="w-4 h-4" />
-          <span className="hidden sm:inline">Add</span>
-        </button>
       </div>
 
       {/* Status filter */}
@@ -277,6 +279,7 @@ export const EmployeeManagement: React.FC<EmployeeManagementProps> = ({
           {filteredEmployees.map(employee => {
             const age = getAge(employee.birthday);
             const isActive = employee.isActive !== false;
+            const showPerf = employee.showInPerformance !== false;
             return (
               <article
                 key={employee.id}
@@ -365,30 +368,55 @@ export const EmployeeManagement: React.FC<EmployeeManagementProps> = ({
                     </button>
                   </div>
 
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={isActive}
-                    onClick={() => handleToggleActive(employee)}
-                    title={isActive ? 'Mark inactive' : 'Mark active'}
-                    aria-label={isActive ? 'Mark inactive' : 'Mark active'}
-                    className="flex items-center gap-2 shrink-0 min-h-[40px] pl-2 touch-manipulation"
-                  >
-                    <span className="text-[10px] font-['Inter'] text-[#F6E9E9]/45">
-                      {isActive ? 'On' : 'Off'}
-                    </span>
-                    <span
-                      className={`relative block w-10 h-5 rounded-full shrink-0 transition-colors ${
-                        isActive ? 'bg-emerald-500/50' : 'bg-[#F6E9E9]/15'
-                      }`}
+                  <div className="flex items-center gap-3 shrink-0">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={showPerf}
+                      onClick={() => handleTogglePerformance(employee)}
+                      title={showPerf ? 'Hide from performance' : 'Show in performance'}
+                      aria-label={showPerf ? 'Hide from performance' : 'Show in performance'}
+                      className="flex items-center gap-2 shrink-0 min-h-[40px] pl-2 touch-manipulation"
                     >
+                      <span className="text-[10px] font-['Inter'] text-[#F6E9E9]/45">Perf</span>
                       <span
-                        className={`absolute top-0.5 left-0.5 block w-4 h-4 rounded-full bg-white shadow-sm transition-transform duration-200 ease-out ${
-                          isActive ? 'translate-x-5' : 'translate-x-0'
+                        className={`relative block w-10 h-5 rounded-full shrink-0 transition-colors ${
+                          showPerf ? 'bg-sky-500/50' : 'bg-[#F6E9E9]/15'
                         }`}
-                      />
-                    </span>
-                  </button>
+                      >
+                        <span
+                          className={`absolute top-0.5 left-0.5 block w-4 h-4 rounded-full bg-white shadow-sm transition-transform duration-200 ease-out ${
+                            showPerf ? 'translate-x-5' : 'translate-x-0'
+                          }`}
+                        />
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={isActive}
+                      onClick={() => handleToggleActive(employee)}
+                      title={isActive ? 'Mark inactive' : 'Mark active'}
+                      aria-label={isActive ? 'Mark inactive' : 'Mark active'}
+                      className="flex items-center gap-2 shrink-0 min-h-[40px] pl-2 touch-manipulation"
+                    >
+                      <span className="text-[10px] font-['Inter'] text-[#F6E9E9]/45">
+                        {isActive ? 'On' : 'Off'}
+                      </span>
+                      <span
+                        className={`relative block w-10 h-5 rounded-full shrink-0 transition-colors ${
+                          isActive ? 'bg-emerald-500/50' : 'bg-[#F6E9E9]/15'
+                        }`}
+                      >
+                        <span
+                          className={`absolute top-0.5 left-0.5 block w-4 h-4 rounded-full bg-white shadow-sm transition-transform duration-200 ease-out ${
+                            isActive ? 'translate-x-5' : 'translate-x-0'
+                          }`}
+                        />
+                      </span>
+                    </button>
+                  </div>
                 </div>
               </article>
             );
@@ -484,6 +512,27 @@ export const EmployeeManagement: React.FC<EmployeeManagementProps> = ({
           </div>
         </div>
       )}
+
+      {!isModalOpen &&
+        createPortal(
+          <div className="fixed bottom-5 sm:bottom-7 inset-x-0 z-40 flex justify-center pointer-events-none px-3">
+            <div className="pointer-events-auto flex items-center rounded-full bg-[#272121]/95 backdrop-blur-md border border-[#E16428]/25 shadow-xl shadow-black/40 pl-3.5 pr-1.5 py-1 gap-0.5 animate-fadeIn">
+              <button
+                type="button"
+                onClick={handleAdd}
+                className="px-2.5 sm:px-3 py-1.5 text-[#F6E9E9] text-sm font-['Poppins'] font-semibold hover:text-[#E16428] active:scale-95 transition-all"
+                aria-label="Add Employee (Alt+A)"
+                title="Add New Employee (Alt+A)"
+              >
+                Add Employee
+              </button>
+              <div className="ml-1.5 shrink-0 w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-[#E16428] border-2 border-[#E16428]/80 flex items-center justify-center shadow-md">
+                <Plus className="w-4 h-4 text-white" strokeWidth={2.5} />
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 };
