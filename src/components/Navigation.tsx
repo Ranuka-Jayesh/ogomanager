@@ -379,7 +379,7 @@ export const Navigation: React.FC<NavigationProps> = ({
             <LogOut className="w-4 h-4" strokeWidth={1.75} />
             Logout
           </button>
-          <p className="mt-3 text-center text-[10px] tracking-[0.14em] uppercase text-[#F6E9E9]/28 font-['Inter']">
+          <p className="mt-3 text-center text-[10px] tracking-[0.14em] uppercase text-[#E16428]/70 font-['Inter']">
             ogo manager · V.26
           </p>
         </div>

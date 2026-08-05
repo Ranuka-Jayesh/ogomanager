@@ -439,66 +439,68 @@ export const EmployeeManagement: React.FC<EmployeeManagementProps> = ({
         />
       )}
 
-      {confirmDeleteId && deletingEmployee && (
-        <div
-          className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fadeIn"
-          onClick={handleCancelDelete}
-        >
+      {confirmDeleteId &&
+        deletingEmployee &&
+        createPortal(
           <div
-            className="w-full max-w-[280px] p-6 animate-scaleIn text-center"
-            onClick={e => e.stopPropagation()}
+            className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fadeIn"
+            onClick={handleCancelDelete}
           >
-            <div className="relative mx-auto mb-5 h-[4.5rem] w-[4.5rem]">
-              <span
-                className="absolute inset-0 rounded-full border border-red-400/25 opacity-60"
-                style={{ animation: 'delete-ring 2.4s ease-out infinite' }}
-              />
-              <span
-                className="absolute inset-2 rounded-full border border-[#E16428]/20 opacity-50"
-                style={{ animation: 'delete-ring 2.4s ease-out 0.6s infinite' }}
-              />
-              <div className="relative flex h-full w-full items-center justify-center rounded-full border border-red-400/40 bg-gradient-to-br from-red-500/15 to-transparent">
-                <Trash2
-                  className="h-6 w-6 text-red-400"
-                  style={{ animation: 'delete-icon 2.8s ease-in-out infinite' }}
+            <div
+              className="w-full max-w-[280px] p-6 animate-scaleIn text-center"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="relative mx-auto mb-5 h-[4.5rem] w-[4.5rem]">
+                <span
+                  className="absolute inset-0 rounded-full border border-red-400/25 opacity-60"
+                  style={{ animation: 'delete-ring 2.4s ease-out infinite' }}
                 />
+                <span
+                  className="absolute inset-2 rounded-full border border-[#E16428]/20 opacity-50"
+                  style={{ animation: 'delete-ring 2.4s ease-out 0.6s infinite' }}
+                />
+                <div className="relative flex h-full w-full items-center justify-center rounded-full border border-red-400/40 bg-gradient-to-br from-red-500/15 to-transparent">
+                  <Trash2
+                    className="h-6 w-6 text-red-400"
+                    style={{ animation: 'delete-icon 2.8s ease-in-out infinite' }}
+                  />
+                </div>
               </div>
-            </div>
 
-            <h3 className="text-2xl font-semibold tracking-tight text-[#F6E9E9] font-['Playfair_Display']">
-              Delete employee?
-            </h3>
-            <p className="mt-1.5 text-[13px] leading-relaxed text-[#F6E9E9]/55 font-['Inter']">
-              Remove{' '}
-              <span className="text-[#E16428] font-medium">
-                {deletingEmployee.firstName} {deletingEmployee.lastName}
-              </span>
-              . This can’t be undone.
-            </p>
+              <h3 className="text-2xl font-semibold tracking-tight text-[#F6E9E9] font-['Playfair_Display']">
+                Delete employee?
+              </h3>
+              <p className="mt-1.5 text-[13px] leading-relaxed text-[#F6E9E9]/55 font-['Inter']">
+                Remove{' '}
+                <span className="text-[#E16428] font-medium">
+                  {deletingEmployee.firstName} {deletingEmployee.lastName}
+                </span>
+                . This can’t be undone.
+              </p>
 
-            <div className="mt-6 space-y-2.5">
-              <button
-                type="button"
-                onClick={handleConfirmDelete}
-                className="group w-full flex items-center justify-center gap-2 py-3 border-0 border-b-2 border-red-500/70 rounded-none bg-transparent text-sm font-semibold text-red-400 hover:text-red-300 hover:border-red-400 transition-all duration-200 font-['Inter'] focus:outline-none"
-              >
-                <Trash2 className="h-4 w-4 transition-transform duration-300 group-hover:scale-110" />
-                <span>Yes, delete</span>
-              </button>
-              <button
-                type="button"
-                onClick={handleCancelDelete}
-                className="w-full py-2.5 border-0 border-b border-transparent rounded-none bg-transparent text-sm text-[#F6E9E9]/50 hover:text-[#F6E9E9] hover:border-[#F6E9E9]/25 transition-all duration-200 font-['Inter'] focus:outline-none"
-              >
-                Keep employee
-              </button>
-            </div>
+              <div className="mt-6 space-y-2.5">
+                <button
+                  type="button"
+                  onClick={handleConfirmDelete}
+                  className="group w-full flex items-center justify-center gap-2 py-3 border-0 border-b-2 border-red-500/70 rounded-none bg-transparent text-sm font-semibold text-red-400 hover:text-red-300 hover:border-red-400 transition-all duration-200 font-['Inter'] focus:outline-none"
+                >
+                  <Trash2 className="h-4 w-4 transition-transform duration-300 group-hover:scale-110" />
+                  <span>Yes, delete</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCancelDelete}
+                  className="w-full py-2.5 border-0 border-b border-transparent rounded-none bg-transparent text-sm text-[#F6E9E9]/50 hover:text-[#F6E9E9] hover:border-[#F6E9E9]/25 transition-all duration-200 font-['Inter'] focus:outline-none"
+                >
+                  Keep employee
+                </button>
+              </div>
 
-            <p className="mt-5 text-[10px] tracking-[0.18em] uppercase text-[#F6E9E9]/25 font-['Inter']">
-              Esc to keep · Enter to delete
-            </p>
+              <p className="mt-5 text-[10px] tracking-[0.18em] uppercase text-[#F6E9E9]/25 font-['Inter']">
+                Esc to keep · Enter to delete
+              </p>
 
-            <style>{`
+              <style>{`
               @keyframes delete-ring {
                 0% { transform: scale(0.85); opacity: 0.55; }
                 70% { transform: scale(1.25); opacity: 0; }
@@ -509,9 +511,10 @@ export const EmployeeManagement: React.FC<EmployeeManagementProps> = ({
                 50% { transform: scale(1.08) rotate(-6deg); }
               }
             `}</style>
-          </div>
-        </div>
-      )}
+            </div>
+          </div>,
+          document.body
+        )}
 
       {!isModalOpen &&
         createPortal(

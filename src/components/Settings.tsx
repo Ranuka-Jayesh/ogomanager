@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { supabase } from '../supabaseClient';
-import { Edit, Trash2, Plus, Save, X, Lock, Layers, MessageSquareText, Mail, Shield, RotateCcw } from 'lucide-react';
+import { Edit, Trash2, Plus, Save, Lock, Layers, MessageSquareText, Mail, Shield, RotateCcw, Package } from 'lucide-react';
 import { useNetworkStatus } from '../hooks/useNetworkStatus';
 import {
   getLocalProjectTypes,
@@ -14,9 +14,11 @@ import {
 import { syncManager } from '../lib/syncManager';
 import { ReceiptCaptionSettings } from './ReceiptCaptionSettings';
 import { SecuritySettings } from './SecuritySettings';
+import { ExpenseProductsSettings } from './ExpenseProductsSettings';
 
 const TABS = [
   { id: 'project-types', label: 'Categories', icon: Layers },
+  { id: 'products', label: 'Products', icon: Package },
   { id: 'receipt-caption', label: 'Captions', icon: MessageSquareText },
   { id: 'security', label: 'Security', icon: Shield },
   { id: 'admin-account', label: 'Account', icon: Lock },
@@ -472,11 +474,16 @@ export const Settings: React.FC = () => {
     }
   }
 
-  // ESC key handler to close delete modal
+  // ESC / Enter for project type delete confirm
   useEffect(() => {
+    if (!showDeleteModal) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && showDeleteModal) {
+      if (event.key === 'Escape') {
         setShowDeleteModal(null);
+      }
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        void handleDeleteType(showDeleteModal.id);
       }
     };
 
@@ -485,11 +492,11 @@ export const Settings: React.FC = () => {
   }, [showDeleteModal]);
 
   return (
-    <div className={`${activeTab === 'receipt-caption' ? 'max-w-5xl' : 'max-w-2xl'} mx-auto pt-4 sm:pt-8 pb-24 px-2 sm:px-4 animate-fadeIn`}>
-      {/* Tabs — equal columns on mobile, no horizontal scroll overflow */}
+    <div className={`${activeTab === 'receipt-caption' || activeTab === 'products' ? 'max-w-5xl' : 'max-w-2xl'} mx-auto pt-4 sm:pt-8 pb-24 px-2 sm:px-4 animate-fadeIn`}>
+      {/* Tabs — wrap evenly on mobile */}
       <div
         role="tablist"
-        className="grid grid-cols-2 sm:grid-cols-4 w-full border-b border-[#E16428]/30 mb-6 sm:mb-8"
+        className="grid grid-cols-3 sm:grid-cols-5 w-full border-b border-[#E16428]/30 mb-6 sm:mb-8"
       >
         {TABS.map(tab => {
           const Icon = tab.icon;
@@ -523,26 +530,29 @@ export const Settings: React.FC = () => {
             <h2 className="text-lg sm:text-xl font-bold text-[#F6E9E9] mb-4 font-['Playfair_Display']">
               Project Types
             </h2>
-            <div className="flex flex-row items-end gap-2 sm:gap-3 mb-6">
+            <div className="mb-6">
+              <label className="block text-[10px] uppercase tracking-wide text-[#F6E9E9]/45 mb-0.5 font-['Inter']">
+                {editingType ? 'Edit type' : 'New type'}
+              </label>
               <input
-                value={newType}
-                onChange={e => setNewType(e.target.value)}
+                value={editingType ? typeInput : newType}
+                onChange={e => {
+                  if (editingType) setTypeInput(e.target.value);
+                  else setNewType(e.target.value);
+                }}
                 onKeyDown={e => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
-                    addType();
+                    if (editingType) void updateType();
+                    else void addType();
+                  } else if (e.key === 'Escape' && editingType) {
+                    setEditingType(null);
+                    setTypeInput('');
                   }
                 }}
-                className="underline-field flex-1 min-w-0 w-full px-0 py-2.5 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] focus:border-[#E16428] focus:outline-none text-sm font-['Inter'] placeholder-[#F6E9E9]/35 transition-[border-color]"
-                placeholder="Add new project type"
+                className="underline-field w-full min-w-0 px-0 py-2.5 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] focus:border-[#E16428] focus:outline-none text-sm font-['Inter'] placeholder-[#F6E9E9]/35 transition-[border-color]"
+                placeholder={editingType ? 'Project type name' : 'Add new project type'}
               />
-              <button
-                onClick={addType}
-                type="button"
-                className="inline-flex items-center justify-center gap-1.5 shrink-0 h-10 pb-0.5 sm:pb-2.5 px-1 text-sm text-[#E16428] hover:text-[#F6E9E9] transition-colors font-['Poppins'] font-medium"
-              >
-                <Plus className="w-4 h-4" /> Add
-              </button>
             </div>
             {loading ? (
               <div className="text-[#F6E9E9]/50 text-sm font-['Inter'] py-3">Loading...</div>
@@ -552,58 +562,38 @@ export const Settings: React.FC = () => {
               </div>
             ) : (
               <div className="flex flex-col max-h-[min(50vh,22rem)] overflow-y-auto overscroll-contain pr-1">
-                {projectTypes.map(type =>
-                  editingType && editingType.id === type.id ? (
+                {projectTypes.map(type => (
                     <div
                       key={type.id}
-                      className="flex items-center gap-2 py-3 border-b border-[#E16428]/25"
+                      className={`group flex items-center gap-3 py-3 border-b transition-colors ${
+                        editingType?.id === type.id
+                          ? 'border-[#E16428]/40'
+                          : 'border-[#E16428]/15 hover:border-[#E16428]/35'
+                      }`}
                     >
-                      <input
-                        value={typeInput}
-                        onChange={e => setTypeInput(e.target.value)}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            updateType();
-                          } else if (e.key === 'Escape') {
-                            setEditingType(null);
-                          }
-                        }}
-                        autoFocus
-                        className="underline-field flex-1 min-w-0 px-0 py-1 bg-transparent border-0 border-b border-[#E16428]/40 rounded-none text-[#F6E9E9] text-sm font-['Inter'] focus:border-[#E16428] focus:outline-none"
-                      />
-                      <button
-                        type="button"
-                        onClick={updateType}
-                        className="p-1.5 text-emerald-400/80 hover:text-emerald-400 transition-colors"
-                        aria-label="Save"
+                      <span
+                        className={`flex-1 min-w-0 text-sm font-['Inter'] truncate ${
+                          editingType?.id === type.id
+                            ? 'text-[#E16428]'
+                            : 'text-[#F6E9E9]'
+                        }`}
                       >
-                        <Save className="w-4 h-4" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setEditingType(null)}
-                        className="p-1.5 text-[#F6E9E9]/40 hover:text-[#E16428] transition-colors"
-                        aria-label="Cancel"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div
-                      key={type.id}
-                      className="group flex items-center gap-3 py-3 border-b border-[#E16428]/15 hover:border-[#E16428]/35 transition-colors"
-                    >
-                      <span className="flex-1 min-w-0 text-[#F6E9E9] text-sm font-['Inter'] truncate">
                         {type.name}
+                        {editingType?.id === type.id && (
+                          <span className="ml-2 text-[10px] uppercase tracking-wide text-[#E16428]/60">
+                            Editing
+                          </span>
+                        )}
                       </span>
                       <button
                         type="button"
                         onClick={() => {
                           setEditingType(type);
                           setTypeInput(type.name);
+                          setNewType('');
                         }}
-                        className="p-1.5 text-[#F6E9E9]/35 hover:text-[#E16428] transition-colors opacity-70 group-hover:opacity-100"
+                        disabled={editingType?.id === type.id}
+                        className="p-1.5 text-[#F6E9E9]/35 hover:text-[#E16428] transition-colors opacity-70 group-hover:opacity-100 disabled:opacity-40"
                         aria-label={`Edit ${type.name}`}
                       >
                         <Edit className="w-4 h-4" />
@@ -617,12 +607,13 @@ export const Settings: React.FC = () => {
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
-                  )
-                )}
+                  ))}
               </div>
             )}
           </section>
         )}
+
+        {activeTab === 'products' && <ExpenseProductsSettings />}
 
         {activeTab === 'receipt-caption' && <ReceiptCaptionSettings />}
 
@@ -767,6 +758,49 @@ export const Settings: React.FC = () => {
         )}
       </div>
 
+      {activeTab === 'project-types' &&
+        (Boolean(editingType) || Boolean(newType.trim())) &&
+        !showDeleteModal &&
+        createPortal(
+          <div className="fixed bottom-5 sm:bottom-7 inset-x-0 z-40 flex justify-center pointer-events-none px-3">
+            <div className="pointer-events-auto flex items-center rounded-full bg-[#272121]/95 backdrop-blur-md border border-[#E16428]/25 shadow-xl shadow-black/40 pl-3.5 pr-1.5 py-1 gap-0.5 animate-fadeIn">
+              <button
+                type="button"
+                onClick={() => {
+                  if (editingType) void updateType();
+                  else void addType();
+                }}
+                className="px-2.5 sm:px-3 py-1.5 text-[#F6E9E9] text-sm font-['Poppins'] font-semibold hover:text-[#E16428] active:scale-95 transition-all"
+              >
+                {editingType ? 'Save' : 'Add'}
+              </button>
+              <span className="w-px h-4 bg-[#F6E9E9]/15 shrink-0" aria-hidden />
+              <button
+                type="button"
+                onClick={() => {
+                  if (editingType) {
+                    setEditingType(null);
+                    setTypeInput('');
+                  } else {
+                    setNewType('');
+                  }
+                }}
+                className="px-2.5 sm:px-3 py-1.5 text-[#F6E9E9] text-sm font-['Poppins'] font-semibold hover:text-[#E16428] active:scale-95 transition-all"
+              >
+                Cancel
+              </button>
+              <div className="ml-1.5 shrink-0 w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-[#E16428] border-2 border-[#E16428]/80 flex items-center justify-center shadow-md">
+                {editingType ? (
+                  <Save className="w-4 h-4 text-white" strokeWidth={2.5} />
+                ) : (
+                  <Plus className="w-4 h-4 text-white" strokeWidth={2.5} />
+                )}
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
       {activeTab === 'admin-account' &&
         adminSubTab === 'email' &&
         emailDirty &&
@@ -831,33 +865,79 @@ export const Settings: React.FC = () => {
           document.body
         )}
 
-      {showDeleteModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm animate-fadeIn p-4">
-          <div className="bg-[#272121] border border-[#E16428]/30 rounded-2xl shadow-2xl p-6 sm:p-8 max-w-xs w-full flex flex-col items-center scale-100 animate-popIn">
-            <div className="mb-4">
-              <svg width="48" height="48" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="12" fill="#E16428" opacity="0.15"/><path d="M15.535 8.465l-7.07 7.07M8.465 8.465l7.07 7.07" stroke="#E16428" strokeWidth="2" strokeLinecap="round"/></svg>
+      {showDeleteModal &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fadeIn"
+            onClick={() => setShowDeleteModal(null)}
+          >
+            <div
+              className="w-full max-w-[280px] p-6 animate-scaleIn text-center"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="relative mx-auto mb-5 h-[4.5rem] w-[4.5rem]">
+                <span
+                  className="absolute inset-0 rounded-full border border-red-400/25 opacity-60"
+                  style={{ animation: 'delete-ring 2.4s ease-out infinite' }}
+                />
+                <span
+                  className="absolute inset-2 rounded-full border border-[#E16428]/20 opacity-50"
+                  style={{ animation: 'delete-ring 2.4s ease-out 0.6s infinite' }}
+                />
+                <div className="relative flex h-full w-full items-center justify-center rounded-full border border-red-400/40 bg-gradient-to-br from-red-500/15 to-transparent">
+                  <Trash2
+                    className="h-6 w-6 text-red-400"
+                    style={{ animation: 'delete-icon 2.8s ease-in-out infinite' }}
+                  />
+                </div>
+              </div>
+
+              <h3 className="text-2xl font-semibold tracking-tight text-[#F6E9E9] font-['Playfair_Display']">
+                Delete project type?
+              </h3>
+              <p className="mt-1.5 text-[13px] leading-relaxed text-[#F6E9E9]/55 font-['Inter']">
+                Remove{' '}
+                <span className="text-[#E16428] font-medium">{showDeleteModal.name}</span>
+                . This can’t be undone.
+              </p>
+
+              <div className="mt-6 space-y-2.5">
+                <button
+                  type="button"
+                  onClick={() => void handleDeleteType(showDeleteModal.id)}
+                  className="group w-full flex items-center justify-center gap-2 py-3 border-0 border-b-2 border-red-500/70 rounded-none bg-transparent text-sm font-semibold text-red-400 hover:text-red-300 hover:border-red-400 transition-all duration-200 font-['Inter'] focus:outline-none"
+                >
+                  <Trash2 className="h-4 w-4 transition-transform duration-300 group-hover:scale-110" />
+                  <span>Yes, delete</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteModal(null)}
+                  className="w-full py-2.5 border-0 border-b border-transparent rounded-none bg-transparent text-sm text-[#F6E9E9]/50 hover:text-[#F6E9E9] hover:border-[#F6E9E9]/25 transition-all duration-200 font-['Inter'] focus:outline-none"
+                >
+                  Keep type
+                </button>
+              </div>
+
+              <p className="mt-5 text-[10px] tracking-[0.18em] uppercase text-[#F6E9E9]/25 font-['Inter']">
+                Esc to keep · Enter to delete
+              </p>
+
+              <style>{`
+                @keyframes delete-ring {
+                  0% { transform: scale(0.85); opacity: 0.55; }
+                  70% { transform: scale(1.25); opacity: 0; }
+                  100% { transform: scale(1.25); opacity: 0; }
+                }
+                @keyframes delete-icon {
+                  0%, 100% { transform: scale(1) rotate(0deg); }
+                  50% { transform: scale(1.08) rotate(-6deg); }
+                }
+              `}</style>
             </div>
-            <h3 className="text-lg font-bold text-[#F6E9E9] mb-2 font-['Poppins']">Delete Project Type?</h3>
-            <p className="text-[#F6E9E9]/70 text-center mb-6 font-['Inter']">
-              Are you sure you want to delete <span className="text-[#E16428] font-bold">{showDeleteModal.name}</span>? This action cannot be undone.
-            </p>
-            <div className="flex space-x-4">
-              <button
-                onClick={() => setShowDeleteModal(null)}
-                className="px-5 py-2 rounded-lg bg-[#363333]/60 text-[#F6E9E9] hover:bg-[#E16428]/10 transition-all duration-300 font-['Poppins']"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => handleDeleteType(showDeleteModal.id)}
-                className="px-5 py-2 rounded-lg bg-gradient-to-r from-[#E16428] to-[#E16428]/80 text-white shadow-lg hover:scale-105 transition-all duration-300 font-['Poppins']"
-              >
-                Yes, Delete
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
     </div>
   );
 }; 

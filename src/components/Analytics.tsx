@@ -20,6 +20,15 @@ import {
   getStoredPinLength,
   loadAdminSecurity,
 } from '../utils/adminSecurity';
+import {
+  type ExpenseSpendRow,
+  type ToolSpendCard,
+  expensePurchaseDate,
+  buildToolSpendForPeriod,
+  expenseInPeriod,
+  expenseBoughtOrSubscribedInPeriod,
+  mapExpenseRowFromDB,
+} from '../utils/expenseToolSpend';
 
 Chart.register(LineElement, PointElement, BarElement, CategoryScale, LinearScale, Tooltip, Legend, LineController, BarController, Filler);
 
@@ -69,23 +78,6 @@ interface MonthlyData {
   expenses: number;
 }
 
-interface AnalyticsExpenseRow {
-  id: string;
-  amount: number;
-  type: 'subscription' | 'one_time';
-  expenseDate: string | null;
-  nextRenewalDate: string | null;
-  startDate: string | null;
-  createdAt: string | null;
-}
-
-function expenseAnchorDate(row: AnalyticsExpenseRow): string | null {
-  if (row.type === 'subscription') {
-    return row.nextRenewalDate || row.startDate || row.createdAt?.slice(0, 10) || null;
-  }
-  return row.expenseDate || row.createdAt?.slice(0, 10) || null;
-}
-
 export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRefresh }) => {
   const { setLastRefresh } = useLastRefresh();
   // Month/year filter state
@@ -131,7 +123,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
   const [metricsDropdownOpen, setMetricsDropdownOpen] = useState(false);
   const [empPaymentsCardSlide, setEmpPaymentsCardSlide] = useState(0); // 0 = total due, 1 = paid, 2 = pending
   const [expensesCardSlide, setExpensesCardSlide] = useState(0); // 0 = total, 1 = one-time, 2 = subscription
-  const [expenses, setExpenses] = useState<AnalyticsExpenseRow[]>([]);
+  const [expenses, setExpenses] = useState<ExpenseSpendRow[]>([]);
   
   // Analytics comparison data state
   const [analyticsComparison, setAnalyticsComparison] = useState<Array<{
@@ -163,24 +155,16 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
   const [showNotification, setShowNotification] = useState(false);
   const [notificationMessage, setNotificationMessage] = useState('');
 
-  // Fetch expenses for profit + KPI cards
+  // Fetch expenses for profit + KPI cards + tool spend
   const fetchExpenses = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from('expenses')
-        .select('id, amount, type, expense_date, next_renewal_date, start_date, created_at');
+        .select(
+          'id, name, account, amount, type, status, category, expense_date, next_renewal_date, start_date, created_at, product_id, image_url'
+        );
       if (error) throw error;
-      setExpenses(
-        (data || []).map((row: any) => ({
-          id: row.id,
-          amount: Number(row.amount) || 0,
-          type: row.type === 'subscription' ? 'subscription' : 'one_time',
-          expenseDate: row.expense_date,
-          nextRenewalDate: row.next_renewal_date,
-          startDate: row.start_date,
-          createdAt: row.created_at,
-        }))
-      );
+      setExpenses((data || []).map(mapExpenseRowFromDB));
     } catch (err) {
       console.error('Error loading expenses for analytics:', err);
       setExpenses([]);
@@ -321,16 +305,9 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
     });
   }, [projects, selectedMonth, selectedYear]);
 
-  // Filtered expenses by month/year (same anchor-date logic as Expenses page)
+  // Filtered expenses: bought or subscribed in selected month/year only
   const filteredExpenses = useMemo(() => {
-    return expenses.filter(expense => {
-      const iso = expenseAnchorDate(expense);
-      if (!iso) return selectedMonth === 'all' && selectedYear === 'all';
-      const date = new Date(iso + 'T12:00:00');
-      const monthOk = selectedMonth === 'all' || date.getMonth() === selectedMonth;
-      const yearOk = selectedYear === 'all' || date.getFullYear() === selectedYear;
-      return monthOk && yearOk;
-    });
+    return expenses.filter(expense => expenseInPeriod(expense, selectedMonth, selectedYear));
   }, [expenses, selectedMonth, selectedYear]);
 
   const totalPeriodExpenses = useMemo(
@@ -347,11 +324,11 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
     [filteredExpenses]
   );
 
-  // Expenses totals keyed by YYYY-MM for KPI month comparisons / charts
+  // Expenses by buy/subscribe month (YYYY-MM) for KPI MoM / chart profit
   const expensesByMonthKey = useMemo(() => {
     const map: Record<string, { total: number; one_time: number; subscription: number }> = {};
     expenses.forEach(expense => {
-      const iso = expenseAnchorDate(expense);
+      const iso = expensePurchaseDate(expense);
       if (!iso) return;
       const date = new Date(iso + 'T12:00:00');
       const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
@@ -533,6 +510,42 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
   };
 
   const expensesChange = getExpenseKpiChange('total');
+
+  /** Per-tool spend for selection (single month MoM, or period totals for All) */
+  const toolSpendCards = useMemo((): ToolSpendCard[] => {
+    return buildToolSpendForPeriod(expenses, selectedMonth, selectedYear);
+  }, [expenses, selectedMonth, selectedYear]);
+
+  const toolSpendHasMom = selectedMonth !== 'all' && selectedYear !== 'all';
+
+  const toolSpendPeriodLabel = useMemo(() => {
+    if (selectedMonth !== 'all' && selectedYear !== 'all') {
+      return new Date(selectedYear as number, selectedMonth as number, 1).toLocaleDateString(
+        undefined,
+        { month: 'long', year: 'numeric' }
+      );
+    }
+    if (selectedMonth === 'all' && selectedYear !== 'all') {
+      return `All months · ${selectedYear}`;
+    }
+    if (selectedMonth !== 'all' && selectedYear === 'all') {
+      return `All years · ${new Date(2000, selectedMonth as number, 1).toLocaleDateString(undefined, { month: 'long' })}`;
+    }
+    return 'All time';
+  }, [selectedMonth, selectedYear]);
+
+  const toolSpendTotals = useMemo(() => {
+    return toolSpendCards.reduce(
+      (acc, c) => {
+        acc.spend += c.spend;
+        acc.accounts += c.accountCount;
+        acc.buys += c.buyCount;
+        return acc;
+      },
+      { spend: 0, accounts: 0, buys: 0 }
+    );
+  }, [toolSpendCards]);
+
   const oneTimeExpensesChange = getExpenseKpiChange('one_time');
   const subscriptionExpensesChange = getExpenseKpiChange('subscription');
 
@@ -743,10 +756,10 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
       }
     });
 
-    // Deduct expenses attributed to each month in the selected year
+    // Deduct expenses by buy/subscribe month in the selected year
     if (typeof selectedYear === 'number') {
       expenses.forEach(expense => {
-        const iso = expenseAnchorDate(expense);
+        const iso = expensePurchaseDate(expense);
         if (!iso) return;
         const date = new Date(iso + 'T12:00:00');
         if (date.getFullYear() !== selectedYear) return;
@@ -828,7 +841,7 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
     });
 
     expenses.forEach(expense => {
-      const iso = expenseAnchorDate(expense);
+      const iso = expensePurchaseDate(expense);
       if (!iso) return;
       const year = new Date(iso + 'T12:00:00').getFullYear();
       if (!years[year]) {
@@ -1558,10 +1571,15 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
     }
   };
 
-  // Excel export function (now called after authentication)
+  // CSV export (projects + tool spend) — after authentication
   const exportToExcel = () => {
-    // Create CSV content
-    const headers = [
+    const escapeCsv = (val: string | number | null | undefined) => {
+      const s = val == null ? '' : String(val);
+      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+
+    const projectHeaders = [
       'ID',
       'Project ID',
       'Client Name',
@@ -1577,69 +1595,173 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
       'Status',
       'Fast Deliver',
       'Created At',
-      'Updated At'
+      'Updated At',
     ];
 
-    const csvContent = [
-      headers.join(','),
-      ...filteredProjects.map(project => {
-        const assignedIds = project.assignedTo
-          ? project.assignedTo.split(',').map(id => id.trim()).filter(Boolean)
-          : [];
-        const assignedToName = assignedIds.length
-          ? assignedIds
-              .map(id => {
-                const emp = employees.find(e => e.id === id);
-                return emp ? `${emp.firstName} ${emp.lastName}` : id;
-              })
-              .join('; ')
-          : 'Unassigned';
-        
-        // Convert project type IDs to names
-        const getProjectTypeNames = (projectDescription: string) => {
-          if (!projectDescription) return 'No types specified';
-          const typeIds = projectDescription.split(',').map(id => id.trim());
-          const typeNames = typeIds.map(id => {
-            const type = projectTypes.find(t => t.id === id);
-            return type ? type.name : `Unknown Type (${id})`;
-          });
-          return typeNames.join(', ');
-        };
-        
-        return [
-          project.id,
-          project.projectId,
-          `"${project.clientName}"`,
-          `"${project.clientUniOrg}"`,
-          `"${getProjectTypeNames(project.projectDescription)}"`,
-          project.deadlineDate,
-          project.price,
-          project.advance,
-          `"${assignedToName}"`,
-          getProjectEmployeePaymentsDue(project),
-          getProjectEmployeePaymentsPaid(project),
-          getProjectEmployeePaymentsPending(project),
-          project.status,
-          project.fastDeliver ? 'Yes' : 'No',
-          project.createdAt,
-          project.updatedAt
-        ].join(',');
-      })
-    ].join('\n');
+    const getProjectTypeNames = (projectDescription: string) => {
+      if (!projectDescription) return 'No types specified';
+      const typeIds = projectDescription.split(',').map(id => id.trim());
+      return typeIds
+        .map(id => {
+          const type = projectTypes.find(t => t.id === id);
+          return type ? type.name : `Unknown Type (${id})`;
+        })
+        .join(', ');
+    };
 
-    // Create and download file
+    const projectRows = filteredProjects.map(project => {
+      const assignedIds = project.assignedTo
+        ? project.assignedTo.split(',').map(id => id.trim()).filter(Boolean)
+        : [];
+      const assignedToName = assignedIds.length
+        ? assignedIds
+            .map(id => {
+              const emp = employees.find(e => e.id === id);
+              return emp ? `${emp.firstName} ${emp.lastName}` : id;
+            })
+            .join('; ')
+        : 'Unassigned';
+
+      return [
+        project.id,
+        project.projectId,
+        escapeCsv(project.clientName),
+        escapeCsv(project.clientUniOrg),
+        escapeCsv(getProjectTypeNames(project.projectDescription)),
+        project.deadlineDate,
+        project.price,
+        project.advance,
+        escapeCsv(assignedToName),
+        getProjectEmployeePaymentsDue(project),
+        getProjectEmployeePaymentsPaid(project),
+        getProjectEmployeePaymentsPending(project),
+        project.status,
+        project.fastDeliver ? 'Yes' : 'No',
+        project.createdAt,
+        project.updatedAt,
+      ].join(',');
+    });
+
+    const sections: string[] = [
+      'PROJECTS',
+      projectHeaders.join(','),
+      ...projectRows,
+    ];
+
+    const toolCards = buildToolSpendForPeriod(expenses, selectedMonth, selectedYear);
+    const periodLines = expenses.filter(e =>
+      expenseBoughtOrSubscribedInPeriod(e, selectedMonth, selectedYear)
+    );
+    const hasMom =
+      selectedMonth !== 'all' && selectedYear !== 'all';
+
+    sections.push(
+      '',
+      'TOOL SPEND',
+      [
+        'Product',
+        'Category',
+        'Spend (LKR)',
+        'Accounts',
+        'Buys',
+        'Prev Month Spend (LKR)',
+        'MoM Change %',
+      ].join(',')
+    );
+
+    if (toolCards.length === 0) {
+      sections.push('(no tool expenses for this period)');
+    } else {
+      toolCards.forEach(card => {
+        let mom = '';
+        if (hasMom) {
+          if (card.spendChangePct != null) {
+            mom = card.spendChangePct.toFixed(1);
+          } else if (card.spend > 0 && card.prevSpend === 0) {
+            mom = 'New';
+          } else if (card.spend === 0 && card.prevSpend > 0) {
+            mom = '-100.0';
+          }
+        }
+        sections.push(
+          [
+            escapeCsv(card.name),
+            escapeCsv(card.category),
+            card.spend,
+            card.accountCount,
+            card.buyCount,
+            hasMom ? card.prevSpend : '',
+            mom,
+          ].join(',')
+        );
+      });
+      const toolTotal = toolCards.reduce((s, c) => s + c.spend, 0);
+      sections.push(
+        [
+          'TOTAL',
+          '',
+          toolTotal,
+          '',
+          '',
+          hasMom ? toolCards.reduce((s, c) => s + c.prevSpend, 0) : '',
+          '',
+        ].join(',')
+      );
+    }
+
+    sections.push(
+      '',
+      'EXPENSE LINE ITEMS',
+      [
+        'Name',
+        'Account',
+        'Type',
+        'Status',
+        'Category',
+        'Amount (LKR)',
+        'Start Date',
+        'Expense / Due Date',
+        'Product ID',
+      ].join(',')
+    );
+
+    if (periodLines.length === 0) {
+      sections.push('(no expense lines for this period)');
+    } else {
+      periodLines.forEach(row => {
+        const dueOrExpense =
+          row.type === 'subscription'
+            ? row.nextRenewalDate || ''
+            : row.expenseDate || expensePurchaseDate(row) || '';
+        sections.push(
+          [
+            escapeCsv(row.name),
+            escapeCsv(row.account),
+            row.type,
+            row.status,
+            escapeCsv(row.category),
+            row.amount,
+            row.startDate || '',
+            dueOrExpense,
+            row.productId || '',
+          ].join(',')
+        );
+      });
+    }
+
+    const csvContent = sections.join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
     link.setAttribute('href', url);
-    
+
     const monthName =
       selectedMonth === 'all'
         ? 'all_months'
         : new Date(0, selectedMonth).toLocaleString('default', { month: 'long' });
     const yearPart = selectedYear === 'all' ? 'all_years' : selectedYear;
-    const filename = `projects_${monthName}_${yearPart}`;
-    
+    const filename = `analytics_${monthName}_${yearPart}`;
+
     link.setAttribute('download', `${filename}.csv`);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
@@ -2845,6 +2967,159 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
         )}
       </GlassCard>
 
+      {/* Tool / product spend for selected period */}
+      <div className="space-y-3">
+        <div className="flex items-baseline justify-between gap-2 px-0.5">
+          <h2 className="text-lg sm:text-xl font-semibold text-[#F6E9E9] font-['Poppins']">
+            Tool spend
+            <span className="ml-2 text-sm font-normal text-[#F6E9E9]/45 font-['Inter']">
+              · bought / subscribed · {toolSpendPeriodLabel}
+            </span>
+          </h2>
+          {toolSpendCards.length > 0 && (
+            <span className="text-[10px] uppercase tracking-[0.12em] text-[#F6E9E9]/30 font-['Inter']">
+              {toolSpendCards.length} tools
+            </span>
+          )}
+        </div>
+
+        {toolSpendCards.length > 0 && (
+          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 px-0.5 text-sm font-['Inter'] text-[#F6E9E9]/55">
+            <span>
+              <span className="text-[#F6E9E9]/35">Total </span>
+              <span className="font-semibold text-[#F6E9E9] tabular-nums font-['Poppins']">
+                LKR {toolSpendTotals.spend.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </span>
+            </span>
+            <span className="text-[#F6E9E9]/25">·</span>
+            <span className="tabular-nums">
+              {toolSpendTotals.accounts} account{toolSpendTotals.accounts === 1 ? '' : 's'}
+            </span>
+            <span className="text-[#F6E9E9]/25">·</span>
+            <span className="tabular-nums">
+              {toolSpendTotals.buys} buy{toolSpendTotals.buys === 1 ? '' : 's'}
+            </span>
+          </div>
+        )}
+
+        {toolSpendCards.length === 0 ? (
+          <p className="text-sm text-[#F6E9E9]/45 font-['Inter'] py-2">
+            No buys or new subscriptions for this period.
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+            {toolSpendCards.map(card => {
+              const hasPrev = toolSpendHasMom && card.prevSpend > 0;
+              const isNew = toolSpendHasMom && card.spend > 0 && card.prevSpend === 0;
+              const isUp = (card.spendChangePct ?? 0) > 0;
+              const isDown = (card.spendChangePct ?? 0) < 0;
+              const trendColor = !toolSpendHasMom
+                ? 'text-transparent'
+                : isNew
+                  ? 'text-[#F6E9E9]/50'
+                  : !hasPrev
+                    ? 'text-[#F6E9E9]/40'
+                    : isDown
+                      ? 'text-emerald-400'
+                      : isUp
+                        ? 'text-red-400'
+                        : 'text-[#F6E9E9]/45';
+              const trendLabel = !toolSpendHasMom
+                ? ''
+                : isNew
+                  ? 'New'
+                  : card.spendChangePct === null
+                    ? '—'
+                    : `${card.spendChangePct >= 0 ? '+' : ''}${card.spendChangePct.toFixed(1)}%`;
+              const accountDelta = card.accountCount - card.prevAccountCount;
+
+              return (
+                <div
+                  key={card.key}
+                  className="rounded-xl bg-[#272121]/40 backdrop-blur-md px-3.5 py-3 flex gap-3 min-w-0"
+                >
+                  <div className="w-11 h-11 rounded-lg bg-white border border-[#E16428]/15 overflow-hidden flex items-center justify-center shrink-0">
+                    {card.imageUrl ? (
+                      <img
+                        src={card.imageUrl}
+                        alt=""
+                        className="w-full h-full object-contain p-0.5"
+                      />
+                    ) : (
+                      <Wallet className="w-5 h-5 text-[#E16428]/70" />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-[#F6E9E9] font-['Inter'] truncate">
+                          {card.name}
+                        </p>
+                        <p className="text-[11px] text-[#E16428]/80 font-['Inter'] truncate">
+                          {card.category}
+                        </p>
+                      </div>
+                      {toolSpendHasMom && (
+                        <span
+                          className={`shrink-0 text-[11px] font-semibold font-['Inter'] tabular-nums ${trendColor}`}
+                          title="vs previous month"
+                        >
+                          {trendLabel}
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-2 flex items-end justify-between gap-2">
+                      <div>
+                        <p className="text-base font-semibold text-[#F6E9E9] font-['Poppins'] tabular-nums leading-none">
+                          LKR {card.spend.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                        </p>
+                        <p className="mt-1 text-[11px] text-[#F6E9E9]/45 font-['Inter']">
+                          {card.accountCount} account{card.accountCount === 1 ? '' : 's'}
+                          {card.buyCount > 0 ? (
+                            <span className="text-[#F6E9E9]/30">
+                              {' '}
+                              · {card.buyCount} buy{card.buyCount === 1 ? '' : 's'}
+                            </span>
+                          ) : null}
+                        </p>
+                      </div>
+                      {toolSpendHasMom && (
+                        <div className="text-right shrink-0">
+                          <p className="text-[10px] uppercase tracking-wide text-[#F6E9E9]/30 font-['Inter']">
+                            vs prev
+                          </p>
+                          <p className="text-[11px] text-[#F6E9E9]/45 font-['Inter'] tabular-nums">
+                            {hasPrev
+                              ? `LKR ${card.prevSpend.toLocaleString(undefined, {
+                                  maximumFractionDigits: 0,
+                                })}`
+                              : '—'}
+                          </p>
+                          {hasPrev && (
+                            <p
+                              className={`text-[10px] font-['Inter'] tabular-nums ${
+                                accountDelta > 0
+                                  ? 'text-amber-300'
+                                  : accountDelta < 0
+                                    ? 'text-emerald-400'
+                                    : 'text-[#F6E9E9]/35'
+                              }`}
+                            >
+                              {accountDelta > 0 ? '+' : ''}
+                              {accountDelta} acct
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {/* Centered floating actions — pill bar like reference */}
       {ReactDOM.createPortal(
         <div className="fixed bottom-5 sm:bottom-7 inset-x-0 z-40 flex justify-center pointer-events-none px-3">
@@ -2861,9 +3136,13 @@ export const Analytics: React.FC<AnalyticsProps> = ({ projects, employees, onRef
             <button
               type="button"
               onClick={handleExportClick}
-              disabled={filteredProjects.length === 0}
+              disabled={filteredProjects.length === 0 && toolSpendCards.length === 0}
               className="px-2.5 sm:px-3 py-1.5 text-[#F6E9E9] text-sm font-['Poppins'] font-semibold hover:text-[#E16428] active:scale-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-[#F6E9E9]"
-              title={filteredProjects.length === 0 ? 'No data to export' : 'Export Excel'}
+              title={
+                filteredProjects.length === 0 && toolSpendCards.length === 0
+                  ? 'No data to export'
+                  : 'Export Excel'
+              }
             >
               Excel
             </button>

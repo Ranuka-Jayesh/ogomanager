@@ -17,6 +17,14 @@ import {
   getStoredPinLength,
   loadAdminSecurity,
 } from '../utils/adminSecurity';
+import {
+  type ExpenseSpendRow,
+  type ToolSpendCard,
+  buildToolSpendForPeriod,
+  expenseBoughtOrSubscribedInMonth,
+  mapExpenseRowFromDB,
+  periodExpenseTotal,
+} from '../utils/expenseToolSpend';
 
 Chart.register(ArcElement, BarElement, CategoryScale, LinearScale, Tooltip, Legend, PieController, LineElement, PointElement, LineController, Filler);
 
@@ -79,6 +87,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
   const [pinInput, setPinInput] = React.useState('');
   const [isGenerating, setIsGenerating] = React.useState(false);
   const [periodExpenses, setPeriodExpenses] = React.useState(0);
+  const [toolSpendCards, setToolSpendCards] = React.useState<ToolSpendCard[]>([]);
   const authStartedRef = useRef(false);
 
   const getSessionEmail = (): string | null => {
@@ -122,7 +131,7 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showAuthModal, open, onClose, isGenerating]);
 
-  // Load expenses for selected period
+  // Load expenses for selected period (cover logic matches Analytics)
   React.useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -130,26 +139,26 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
       try {
         const { data, error } = await supabase
           .from('expenses')
-          .select('amount, type, expense_date, next_renewal_date, start_date, created_at');
+          .select(
+            'id, name, account, amount, type, status, category, expense_date, next_renewal_date, start_date, created_at, product_id, image_url'
+          );
         if (error || !data || cancelled) {
-          if (!cancelled) setPeriodExpenses(0);
+          if (!cancelled) {
+            setPeriodExpenses(0);
+            setToolSpendCards([]);
+          }
           return;
         }
-        let total = 0;
-        data.forEach((row: any) => {
-          const iso =
-            row.type === 'subscription'
-              ? row.next_renewal_date || row.start_date || row.created_at?.slice?.(0, 10)
-              : row.expense_date || row.created_at?.slice?.(0, 10);
-          if (!iso) return;
-          const d = new Date(String(iso).slice(0, 10) + 'T12:00:00');
-          const monthOk = month === 'all' || d.getMonth() === month;
-          const yearOk = year === 'all' || d.getFullYear() === year;
-          if (monthOk && yearOk) total += Number(row.amount) || 0;
-        });
-        if (!cancelled) setPeriodExpenses(total);
+        const rows: ExpenseSpendRow[] = data.map(mapExpenseRowFromDB);
+        if (!cancelled) {
+          setPeriodExpenses(periodExpenseTotal(rows, month, year));
+          setToolSpendCards(buildToolSpendForPeriod(rows, month, year));
+        }
       } catch {
-        if (!cancelled) setPeriodExpenses(0);
+        if (!cancelled) {
+          setPeriodExpenses(0);
+          setToolSpendCards([]);
+        }
       }
     })();
     return () => {
@@ -373,22 +382,21 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
         }
       });
 
-      // Business expenses attributed to this month (expense_date / next_renewal / start_date)
+      // Business expenses bought/subscribed in this calendar month
       let expensesTotal = 0;
       const { data: expenseRows, error: expenseError } = await supabase
         .from('expenses')
-        .select('amount, type, expense_date, next_renewal_date, start_date, created_at');
+        .select(
+          'id, name, account, amount, type, status, category, expense_date, next_renewal_date, start_date, created_at, product_id, image_url'
+        );
 
       if (!expenseError && expenseRows) {
+        // targetMonth is 1-based from caller
+        const m0 = targetMonth - 1;
         expenseRows.forEach((row: any) => {
-          const iso =
-            row.type === 'subscription'
-              ? row.next_renewal_date || row.start_date || row.created_at?.slice?.(0, 10)
-              : row.expense_date || row.created_at?.slice?.(0, 10);
-          if (!iso) return;
-          const d = new Date(String(iso).slice(0, 10) + 'T12:00:00');
-          if (d.getFullYear() === targetYear && d.getMonth() + 1 === targetMonth) {
-            expensesTotal += Number(row.amount) || 0;
+          const mapped = mapExpenseRowFromDB(row);
+          if (expenseBoughtOrSubscribedInMonth(mapped, m0, targetYear)) {
+            expensesTotal += mapped.amount;
           }
         });
       }
@@ -896,7 +904,76 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
         { emphasizeLast: true }
       );
 
-      // ── Revenue trend ───────────────────────────────────────
+      // ── Tool / product spend ────────────────────────────────
+      if (toolSpendCards.length > 0) {
+        const hasMom = month !== 'all' && year !== 'all';
+        sectionTitle(hasMom ? 'Tool Spend (vs Previous Month)' : 'Tool Spend');
+        const fmtMom = (card: ToolSpendCard) => {
+          if (!hasMom) return '—';
+          if (card.spendChangePct != null) {
+            const sign = card.spendChangePct > 0 ? '+' : '';
+            return `${sign}${card.spendChangePct.toFixed(1)}%`;
+          }
+          if (card.spend > 0 && card.prevSpend === 0) return 'New';
+          if (card.spend === 0 && card.prevSpend > 0) return '-100%';
+          return '—';
+        };
+        drawTable(
+          hasMom
+            ? ['Product', 'Category', 'Spend', 'Accts', 'Buys', 'Prev', 'MoM']
+            : ['Product', 'Category', 'Spend', 'Accounts', 'Buys'],
+          toolSpendCards.slice(0, 15).map((card) =>
+            hasMom
+              ? [
+                  card.name,
+                  card.category,
+                  fmtLkr(card.spend),
+                  String(card.accountCount),
+                  String(card.buyCount),
+                  fmtLkr(card.prevSpend),
+                  fmtMom(card),
+                ]
+              : [
+                  card.name,
+                  card.category,
+                  fmtLkr(card.spend),
+                  String(card.accountCount),
+                  String(card.buyCount),
+                ]
+          ),
+          hasMom
+            ? [
+                contentWidth * 0.22,
+                contentWidth * 0.14,
+                contentWidth * 0.16,
+                contentWidth * 0.1,
+                contentWidth * 0.1,
+                contentWidth * 0.14,
+                contentWidth * 0.14,
+              ]
+            : [
+                contentWidth * 0.3,
+                contentWidth * 0.2,
+                contentWidth * 0.22,
+                contentWidth * 0.14,
+                contentWidth * 0.14,
+              ],
+          { emphasizeLast: false }
+        );
+        const toolTotal = toolSpendCards.reduce((s, c) => s + c.spend, 0);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(8);
+        pdf.setTextColor(...MUTED);
+        ensureSpace(6);
+        pdf.text(
+          `Tool total: ${fmtLkr(toolTotal)} · ${toolSpendCards.length} product${toolSpendCards.length === 1 ? '' : 's'}${
+            toolSpendCards.length > 15 ? ' (top 15 shown)' : ''
+          }`,
+          margin,
+          y
+        );
+        y += 8;
+      }
       if (revenueTrend.length > 0) {
         sectionTitle('Revenue Trend Analysis');
         drawTable(
@@ -1063,6 +1140,11 @@ export const ReportModal: React.FC<ReportModalProps> = ({ open, onClose, project
         `Revenue of ${fmtLkr(totalRevenue)} at ${fmtPct(profitMargin)} profit margin for ${periodLabel}.`,
         `Completion rate ${fmtPct(completionRate)} (${completedProjects} of ${totalProjects} projects delivered).`,
         `Net profit ${fmtLkr(profit)} after employee payments (${fmtLkr(totalEmployeePayments)}) and expenses (${fmtLkr(periodExpenses)}).`,
+        toolSpendCards.length > 0
+          ? `Tool spend: ${toolSpendCards.length} product${toolSpendCards.length === 1 ? '' : 's'} totaling ${fmtLkr(
+              toolSpendCards.reduce((s, c) => s + c.spend, 0)
+            )}; top is ${toolSpendCards[0].name} (${fmtLkr(toolSpendCards[0].spend)}).`
+          : `No tool / product expenses recorded for ${periodLabel}.`,
         `Best employee: ${bestEmployee ? `${bestEmployee.firstName} ${bestEmployee.lastName}` : 'N/A'} (${fmtLkr(bestEmployee?.displayValue ?? 0)}).`,
         `Top client: ${bestOrg ? bestOrg[0] : 'N/A'} with ${bestOrg ? bestOrg[1].count : 0} projects (${fmtLkr(bestOrg ? bestOrg[1].revenue : 0)}).`,
         `Employee payment ratio: ${totalRevenue > 0 ? ((totalEmployeePayments / totalRevenue) * 100).toFixed(1) : '0'}% of revenue.`,

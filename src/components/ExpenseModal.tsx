@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Loader2, Check, ChevronDown, ImagePlus } from 'lucide-react';
+import { X, Loader2, Check, ChevronDown, ImagePlus, Package } from 'lucide-react';
 import { Listbox } from '@headlessui/react';
 import RepeatOnIcon from '@mui/icons-material/RepeatOn';
 import RepeatOneIcon from '@mui/icons-material/RepeatOne';
@@ -12,10 +12,12 @@ import {
   Expense,
   ExpenseBillingCycle,
   ExpenseCategory,
+  ExpenseProduct,
   ExpenseStatus,
   ExpenseType,
 } from '../types';
 import { UnderlineDatePicker } from './UnderlineDatePicker';
+import { supabase } from '../supabaseClient';
 
 const CATEGORIES: ExpenseCategory[] = [
   'AI Tools',
@@ -88,6 +90,7 @@ const emptyForm = (): ExpenseFormData => ({
   notes: '',
   paymentMethod: 'Card',
   imageUrl: null,
+  productId: null,
 });
 
 const fieldClass =
@@ -121,7 +124,38 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [removeImage, setRemoveImage] = useState(false);
+  const [products, setProducts] = useState<ExpenseProduct[]>([]);
+  const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const isBusy = saving || isSubmitting;
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error: err } = await supabase
+          .from('expense_products')
+          .select('*')
+          .order('name', { ascending: true });
+        if (cancelled || err || !data) return;
+        setProducts(
+          data.map((row: any) => ({
+            id: row.id,
+            name: row.name,
+            category: row.category as ExpenseCategory,
+            imageUrl: row.image_url || null,
+          }))
+        );
+      } catch {
+        /* catalog optional until migration */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (expense) {
@@ -140,18 +174,53 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
         notes: expense.notes || '',
         paymentMethod: expense.paymentMethod || '',
         imageUrl: expense.imageUrl || null,
+        productId: expense.productId || null,
       });
       setAmountDisplay(formatAmountDisplay(expense.amount));
       setImagePreview(expense.imageUrl || null);
+      setSelectedProductId(expense.productId || null);
     } else {
       setFormData(emptyForm());
       setAmountDisplay('');
       setImagePreview(null);
+      setSelectedProductId(null);
     }
     setImageFile(null);
     setRemoveImage(false);
     setError('');
   }, [expense]);
+
+  const applyProduct = (productId: string | null) => {
+    setSelectedProductId(productId);
+    if (!productId) {
+      setFormData(prev => ({
+        ...prev,
+        productId: null,
+        // keep name/category/image for custom entry
+      }));
+      return;
+    }
+    const product = products.find(p => p.id === productId);
+    if (!product) return;
+    if (imagePreview?.startsWith('blob:')) URL.revokeObjectURL(imagePreview);
+    setImageFile(null);
+    setRemoveImage(false);
+    setImagePreview(product.imageUrl);
+    setFormData(prev => ({
+      ...prev,
+      productId: product.id,
+      name: product.name,
+      category: product.category,
+      imageUrl: product.imageUrl,
+      type: 'subscription',
+      billingCycle: prev.billingCycle || 'monthly',
+      startDate: prev.startDate || todayISO(),
+      nextRenewalDate:
+        prev.nextRenewalDate ||
+        addBillingPeriod(prev.startDate || todayISO(), prev.billingCycle || 'monthly'),
+      status: prev.status === 'paid' ? 'active' : prev.status,
+    }));
+  };
 
   useEffect(() => {
     return () => {
@@ -261,6 +330,7 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isBusy) return;
     setError('');
 
     if (!formData.name.trim()) {
@@ -285,26 +355,34 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
       return;
     }
 
-    await onSave(
-      {
-        ...formData,
-        name: formData.name.trim(),
-        account: formData.account.trim(),
-        notes: formData.notes.trim(),
-        paymentMethod: formData.paymentMethod.trim(),
-        billingCycle: formData.type === 'subscription' ? formData.billingCycle || 'monthly' : null,
-        startDate: formData.type === 'subscription' ? formData.startDate : null,
-        nextRenewalDate: formData.type === 'subscription' ? formData.nextRenewalDate : null,
-        expenseDate: formData.type === 'one_time' ? formData.expenseDate : null,
-        reminderDaysBefore:
-          formData.type === 'subscription' ? Math.max(0, formData.reminderDaysBefore || 5) : 0,
-        imageUrl: removeImage ? null : formData.imageUrl,
-      },
-      {
-        imageFile: imageFile || null,
-        removeImage,
-      }
-    );
+    setIsSubmitting(true);
+    try {
+      await onSave(
+        {
+          ...formData,
+          name: formData.name.trim(),
+          account: formData.account.trim(),
+          notes: formData.notes.trim(),
+          paymentMethod: formData.paymentMethod.trim(),
+          billingCycle: formData.type === 'subscription' ? formData.billingCycle || 'monthly' : null,
+          startDate: formData.type === 'subscription' ? formData.startDate : null,
+          nextRenewalDate: formData.type === 'subscription' ? formData.nextRenewalDate : null,
+          expenseDate: formData.type === 'one_time' ? formData.expenseDate : null,
+          reminderDaysBefore:
+            formData.type === 'subscription' ? Math.max(0, formData.reminderDaysBefore || 5) : 0,
+          imageUrl: removeImage ? null : formData.imageUrl,
+          productId: selectedProductId || formData.productId || null,
+        },
+        {
+          imageFile: imageFile || null,
+          removeImage,
+        }
+      );
+    } catch {
+      /* parent reports errors */
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const statusOptions: ExpenseStatus[] =
@@ -313,15 +391,26 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
       : ['paid', 'cancelled'];
 
   const isSub = formData.type === 'subscription';
+  const catalogLocked = Boolean(selectedProductId);
+  const selectedProduct = products.find(p => p.id === selectedProductId) || null;
 
   return createPortal(
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-3 z-[9999] animate-fadeIn">
+    <div
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-3 bg-black/50 backdrop-blur-sm animate-fadeIn"
+      onClick={() => {
+        if (!isBusy) onClose();
+      }}
+    >
       <form
         onSubmit={handleSubmit}
-        className="relative bg-[#272121] border border-[#E16428]/25 rounded-2xl shadow-2xl w-full max-w-xl max-h-[92vh] overflow-y-auto animate-scaleIn"
+        onClick={e => e.stopPropagation()}
+        aria-busy={isBusy}
+        className={`relative flex flex-col bg-[#272121] border border-[#E16428]/25 rounded-2xl shadow-2xl w-full max-w-xl max-h-[92vh] overflow-hidden animate-scaleIn ${
+          isBusy ? 'pointer-events-none' : ''
+        }`}
       >
         {/* Header */}
-        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 px-4 py-3 border-b border-[#E16428]/15 bg-[#272121]/95 backdrop-blur-sm">
+        <div className="relative z-10 flex items-center justify-between gap-3 px-4 py-3 border-b border-[#E16428]/15 bg-[#272121] shrink-0">
           <div className="flex items-center gap-2.5 min-w-0">
             <img
               src="/logo_ogo.png"
@@ -335,16 +424,120 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            disabled={saving}
+            disabled={isBusy}
             title="Close"
             aria-label="Close"
-            className="size-7 min-w-7 min-h-7 max-w-7 max-h-7 flex-none box-border p-0 inline-flex items-center justify-center rounded-md text-[#F6E9E9]/60 hover:text-[#F6E9E9] hover:bg-[#E16428]/15 transition-colors disabled:opacity-40 disabled:pointer-events-none"
+            className="size-7 min-w-7 min-h-7 max-w-7 max-h-7 flex-none box-border p-0 inline-flex items-center justify-center rounded-md text-[#F6E9E9]/60 hover:text-[#F6E9E9] hover:bg-[#E16428]/15 transition-colors disabled:opacity-40 disabled:pointer-events-none pointer-events-auto"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="px-4 py-3 space-y-3">
+        <div
+          className={`px-4 py-3 space-y-3 overflow-y-auto min-h-0 flex-1 ${
+            isBusy ? 'overflow-hidden' : ''
+          }`}
+        >
+          {/* Product catalog dropdown */}
+          {products.length > 0 && (
+            <div>
+              <label className={labelClass}>Product</label>
+              <Listbox
+                value={selectedProductId ?? ''}
+                onChange={(id: string) => applyProduct(id || null)}
+              >
+                <div className="relative">
+                  <Listbox.Button className="w-full flex items-center gap-3 px-0 py-2 bg-transparent border-0 border-b border-[#E16428]/30 text-left focus:border-[#E16428] outline-none transition-[border-color]">
+                    <div className="w-9 h-9 rounded-lg bg-white border border-[#E16428]/15 overflow-hidden flex items-center justify-center shrink-0">
+                      {selectedProduct?.imageUrl || (catalogLocked && imagePreview) ? (
+                        <img
+                          src={selectedProduct?.imageUrl || imagePreview || ''}
+                          alt=""
+                          className="w-full h-full object-contain p-0.5"
+                        />
+                      ) : (
+                        <Package className="w-4 h-4 text-[#F6E9E9]/30" />
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      {selectedProduct ? (
+                        <>
+                          <p className="text-sm text-[#F6E9E9] font-['Inter'] truncate">
+                            {selectedProduct.name}
+                          </p>
+                          <p className="text-[11px] text-[#E16428]/80 font-['Inter'] truncate">
+                            {selectedProduct.category}
+                          </p>
+                        </>
+                      ) : (
+                        <p className="text-sm text-[#F6E9E9]/45 font-['Inter']">
+                          Select product or custom
+                        </p>
+                      )}
+                    </div>
+                    <ChevronDown className="w-4 h-4 text-[#F6E9E9]/40 shrink-0" />
+                  </Listbox.Button>
+                  <Listbox.Options className="absolute z-50 mt-1 w-full max-h-56 overflow-auto rounded-lg bg-[#232021] border border-[#E16428]/30 shadow-xl py-1">
+                    <Listbox.Option
+                      value=""
+                      className={({ active }) =>
+                        `cursor-pointer px-3 py-2.5 flex items-center gap-3 ${
+                          active ? 'bg-[#E16428]/12' : ''
+                        }`
+                      }
+                    >
+                      <div className="w-9 h-9 rounded-lg border border-dashed border-[#E16428]/25 flex items-center justify-center shrink-0">
+                        <ImagePlus className="w-3.5 h-3.5 text-[#F6E9E9]/35" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm text-[#F6E9E9] font-['Inter']">Custom / other</p>
+                        <p className="text-[11px] text-[#F6E9E9]/40 font-['Inter']">
+                          Enter name & logo manually
+                        </p>
+                      </div>
+                    </Listbox.Option>
+                    {products.map(p => (
+                      <Listbox.Option
+                        key={p.id}
+                        value={p.id}
+                        className={({ active, selected }) =>
+                          `cursor-pointer px-3 py-2.5 flex items-center gap-3 ${
+                            active ? 'bg-[#E16428]/12' : ''
+                          } ${selected ? 'bg-[#E16428]/8' : ''}`
+                        }
+                      >
+                        {({ selected }) => (
+                          <>
+                            <div className="w-9 h-9 rounded-lg bg-white border border-[#E16428]/15 overflow-hidden flex items-center justify-center shrink-0">
+                              {p.imageUrl ? (
+                                <img
+                                  src={p.imageUrl}
+                                  alt=""
+                                  className="w-full h-full object-contain p-0.5"
+                                />
+                              ) : (
+                                <Package className="w-4 h-4 text-[#272121]/40" />
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm text-[#F6E9E9] font-['Inter'] truncate">
+                                {p.name}
+                              </p>
+                              <p className="text-[11px] text-[#E16428]/80 font-['Inter'] truncate">
+                                {p.category}
+                              </p>
+                            </div>
+                            {selected && <Check className="w-4 h-4 text-[#E16428] shrink-0" />}
+                          </>
+                        )}
+                      </Listbox.Option>
+                    ))}
+                  </Listbox.Options>
+                </div>
+              </Listbox>
+            </div>
+          )}
+
           {/* Name + logo (same row) */}
           <div className="flex items-end gap-3">
             <div className="min-w-0 flex-1">
@@ -356,17 +549,26 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
                 value={formData.name}
                 onChange={e => setFormData({ ...formData, name: e.target.value })}
                 placeholder="e.g. Cursor AI, FB Marketing…"
-                className={fieldClass}
+                className={`${fieldClass} ${catalogLocked ? 'opacity-70' : ''}`}
                 required
+                readOnly={catalogLocked}
               />
             </div>
             <div className="relative shrink-0 pb-0.5">
               <button
                 type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={saving}
-                className="relative w-11 h-11 rounded-lg border border-[#E16428]/30 bg-[#1a1818] overflow-hidden flex items-center justify-center hover:border-[#E16428]/55 transition-colors disabled:opacity-50"
-                title={imagePreview ? 'Change logo' : 'Upload logo'}
+                onClick={() => {
+                  if (!catalogLocked) fileInputRef.current?.click();
+                }}
+                disabled={saving || catalogLocked}
+                className="relative w-11 h-11 rounded-lg border border-[#E16428]/30 bg-[#1a1818] overflow-hidden flex items-center justify-center hover:border-[#E16428]/55 transition-colors disabled:opacity-60"
+                title={
+                  catalogLocked
+                    ? 'Logo from product catalog'
+                    : imagePreview
+                      ? 'Change logo'
+                      : 'Upload logo'
+                }
                 aria-label={imagePreview ? 'Change logo' : 'Upload logo'}
               >
                 {imagePreview ? (
@@ -375,7 +577,7 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
                   <ImagePlus className="w-4 h-4 text-[#F6E9E9]/40" />
                 )}
               </button>
-              {imagePreview && (
+              {imagePreview && !catalogLocked && (
                 <button
                   type="button"
                   onClick={handleRemoveImage}
@@ -449,10 +651,13 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
                 onChange={(category: ExpenseCategory) =>
                   setFormData({ ...formData, category })
                 }
+                disabled={catalogLocked}
               >
                 <div className="relative">
                   <Listbox.Button
-                    className={`${fieldClass} flex justify-between items-center text-left`}
+                    className={`${fieldClass} flex justify-between items-center text-left ${
+                      catalogLocked ? 'opacity-70 cursor-default' : ''
+                    }`}
                   >
                     <span className="truncate">{formData.category}</span>
                     <ChevronDown className="w-3.5 h-3.5 ml-1 text-[#E16428] flex-shrink-0" />
@@ -670,12 +875,12 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
 
               <button
                 type="submit"
-                disabled={saving}
+                disabled={isBusy}
                 title={expense ? 'Update expense' : 'Add expense'}
                 aria-label={expense ? 'Update expense' : 'Add expense'}
-                className="aspect-square w-full flex items-center justify-center rounded-md border border-[#E16428]/50 bg-[#E16428] text-white hover:bg-[#E16428]/90 transition-colors disabled:opacity-60"
+                className="aspect-square w-full flex items-center justify-center rounded-md border border-[#E16428]/50 bg-[#E16428] text-white hover:bg-[#E16428]/90 transition-colors disabled:opacity-60 pointer-events-auto"
               >
-                {saving ? (
+                {isBusy ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
                 ) : (
                   <Check className="w-3.5 h-3.5" />
@@ -685,13 +890,19 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
           </div>
         </div>
 
-        {saving && (
-          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center rounded-2xl bg-[#272121]/85 backdrop-blur-[2px]">
-            <Loader2 className="w-8 h-8 text-[#E16428] animate-spin" />
-            <p className="mt-3 text-xs font-semibold text-[#F6E9E9] font-['Poppins']">
+        {isBusy && (
+          <div
+            className="absolute inset-0 z-[100] flex flex-col items-center justify-center rounded-2xl bg-[#1a1616]/92 backdrop-blur-sm pointer-events-auto animate-fadeIn"
+            role="status"
+            aria-live="polite"
+          >
+            <div className="flex h-14 w-14 items-center justify-center rounded-full border border-[#E16428]/35 bg-[#272121] shadow-lg shadow-black/40">
+              <Loader2 className="w-7 h-7 text-[#E16428] animate-spin" strokeWidth={2.25} />
+            </div>
+            <p className="mt-4 text-sm font-semibold text-[#F6E9E9] font-['Poppins']">
               {expense ? 'Updating expense…' : 'Adding expense…'}
             </p>
-            <p className="mt-1 text-[10px] text-[#F6E9E9]/45 font-['Inter']">Please wait…</p>
+            <p className="mt-1 text-xs text-[#F6E9E9]/50 font-['Inter']">Please wait…</p>
           </div>
         )}
       </form>

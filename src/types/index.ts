@@ -83,6 +83,18 @@ export interface Expense {
   paymentMethod: string;
   /** Public URL of product logo in Supabase storage. */
   imageUrl: string | null;
+  /** Optional link to admin-managed product catalog. */
+  productId?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Admin-managed product selectable in the expense form. */
+export interface ExpenseProduct {
+  id: string;
+  name: string;
+  category: ExpenseCategory;
+  imageUrl: string | null;
   createdAt?: string;
   updatedAt?: string;
 }

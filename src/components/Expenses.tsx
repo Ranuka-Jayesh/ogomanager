@@ -16,6 +16,7 @@ import { Expense, ExpenseBillingCycle } from '../types';
 import { GlassCard } from './GlassCard';
 import { MonthYearNavigator, MonthSelection, YearSelection } from './MonthYearNavigator';
 import { ExpenseModal, ExpenseFormData } from './ExpenseModal';
+import { UnderlineDatePicker } from './UnderlineDatePicker';
 import { supabase } from '../supabaseClient';
 import { useMobileNotifications } from '../hooks/useMobileNotifications';
 
@@ -40,6 +41,7 @@ function mapFromDB(row: any): Expense {
     notes: row.notes || '',
     paymentMethod: row.payment_method || '',
     imageUrl: row.image_url || null,
+    productId: row.product_id || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -61,6 +63,7 @@ function mapToDB(data: ExpenseFormData) {
     notes: data.notes || '',
     payment_method: data.paymentMethod || '',
     image_url: data.imageUrl || null,
+    product_id: data.productId || null,
     updated_at: new Date().toISOString(),
   };
 }
@@ -142,9 +145,56 @@ function canMarkRenewed(expense: Expense): boolean {
 
 function expenseAnchorDate(expense: Expense): string | null {
   if (expense.type === 'subscription') {
-    return expense.nextRenewalDate || expense.startDate;
+    return expense.startDate || expense.nextRenewalDate;
   }
   return expense.expenseDate || expense.createdAt?.slice(0, 10) || null;
+}
+
+/** Year*12 + month index for inclusive range compares. */
+function yearMonthKey(iso: string): number {
+  const d = parseLocalDate(iso);
+  return d.getFullYear() * 12 + d.getMonth();
+}
+
+/**
+ * Active/paused subscriptions appear in every month from start (subscribed)
+ * through next renewal (due) month, inclusive.
+ */
+function subscriptionCoversPeriod(
+  expense: Expense,
+  selectedMonth: MonthSelection,
+  selectedYear: YearSelection
+): boolean {
+  if (selectedMonth === 'all' && selectedYear === 'all') return true;
+
+  const startIso = expense.startDate || expense.nextRenewalDate;
+  const endIso = expense.nextRenewalDate || expense.startDate;
+  if (!startIso) return false;
+
+  let startKey = yearMonthKey(startIso);
+  let endKey = yearMonthKey(endIso || startIso);
+  if (startKey > endKey) {
+    const t = startKey;
+    startKey = endKey;
+    endKey = t;
+  }
+
+  if (selectedYear === 'all') {
+    if (selectedMonth === 'all') return true;
+    for (let k = startKey; k <= endKey; k++) {
+      if (k % 12 === selectedMonth) return true;
+    }
+    return false;
+  }
+
+  if (selectedMonth === 'all') {
+    const yearStart = (selectedYear as number) * 12;
+    const yearEnd = yearStart + 11;
+    return startKey <= yearEnd && endKey >= yearStart;
+  }
+
+  const selectedKey = (selectedYear as number) * 12 + (selectedMonth as number);
+  return selectedKey >= startKey && selectedKey <= endKey;
 }
 
 function expenseDueSortKey(expense: Expense): number {
@@ -189,6 +239,11 @@ export const Expenses: React.FC = () => {
   const [confirmDelete, setConfirmDelete] = useState<Expense | null>(null);
   const [confirmRenew, setConfirmRenew] = useState<Expense | null>(null);
   const [renewing, setRenewing] = useState(false);
+  const [renewFrom, setRenewFrom] = useState('');
+  const [renewTo, setRenewTo] = useState('');
+  const [renewAmount, setRenewAmount] = useState('');
+  const [renewAccount, setRenewAccount] = useState('');
+  const [renewError, setRenewError] = useState('');
   const [loadError, setLoadError] = useState('');
   const [statsSlide, setStatsSlide] = useState(0);
   const statsTouchX = useRef<number | null>(null);
@@ -234,10 +289,14 @@ export const Expenses: React.FC = () => {
   const availableYears = useMemo(() => {
     const years = new Set<number>();
     expenses.forEach(e => {
-      const d = expenseAnchorDate(e);
-      if (!d) return;
-      const y = parseLocalDate(d).getFullYear();
-      if (Number.isFinite(y)) years.add(y);
+      if (e.type === 'subscription') {
+        if (e.startDate) years.add(parseLocalDate(e.startDate).getFullYear());
+        if (e.nextRenewalDate) years.add(parseLocalDate(e.nextRenewalDate).getFullYear());
+      } else {
+        const d = expenseAnchorDate(e);
+        if (!d) return;
+        years.add(parseLocalDate(d).getFullYear());
+      }
     });
     if (years.size === 0) years.add(now.getFullYear());
     return Array.from(years).sort((a, b) => b - a);
@@ -245,6 +304,14 @@ export const Expenses: React.FC = () => {
 
   const inSelectedPeriod = useCallback(
     (expense: Expense) => {
+      // Active / paused plans: show in all months from subscribed → due month
+      if (
+        expense.type === 'subscription' &&
+        (expense.status === 'active' || expense.status === 'paused')
+      ) {
+        return subscriptionCoversPeriod(expense, selectedMonth, selectedYear);
+      }
+
       const d = expenseAnchorDate(expense);
       if (!d) return selectedMonth === 'all' && selectedYear === 'all';
       const date = parseLocalDate(d);
@@ -304,13 +371,15 @@ export const Expenses: React.FC = () => {
     try {
       let imageUrl = data.imageUrl || null;
       const previousUrl = editing?.imageUrl || null;
+      const isCatalogLogo = (url: string | null | undefined) =>
+        Boolean(url && url.includes('/expense-logos/') && url.includes('/products/'));
 
       if (extras?.removeImage) {
-        if (previousUrl) await deleteExpenseLogo(previousUrl);
+        if (previousUrl && !isCatalogLogo(previousUrl)) await deleteExpenseLogo(previousUrl);
         imageUrl = null;
       } else if (extras?.imageFile) {
         imageUrl = await uploadExpenseLogo(extras.imageFile);
-        if (previousUrl && previousUrl !== imageUrl) {
+        if (previousUrl && previousUrl !== imageUrl && !isCatalogLogo(previousUrl)) {
           await deleteExpenseLogo(previousUrl);
         }
       }
@@ -372,25 +441,67 @@ export const Expenses: React.FC = () => {
     }
   };
 
-  const handleMarkRenewed = async (expense: Expense) => {
-    if (!expense.nextRenewalDate) return;
+  const openRenewModal = (expense: Expense) => {
     const cycle: ExpenseBillingCycle = expense.billingCycle || 'monthly';
-    const next = addBillingPeriod(expense.nextRenewalDate, cycle);
+    const from = expense.nextRenewalDate || expense.startDate || new Date().toISOString().slice(0, 10);
+    const to = addBillingPeriod(from, cycle);
+    setRenewFrom(from);
+    setRenewTo(to);
+    setRenewAmount(
+      Number.isFinite(expense.amount) && expense.amount > 0
+        ? expense.amount.toLocaleString('en-US', { maximumFractionDigits: 2 })
+        : ''
+    );
+    setRenewAccount(expense.account || '');
+    setRenewError('');
+    setConfirmRenew(expense);
+  };
+
+  const handleMarkRenewed = async () => {
+    if (!confirmRenew) return;
+    setRenewError('');
+
+    if (!renewFrom) {
+      setRenewError('Renew from date is required');
+      return;
+    }
+    if (!renewTo) {
+      setRenewError('Renew to date is required');
+      return;
+    }
+    if (renewTo < renewFrom) {
+      setRenewError('Renew to date must be on or after from date');
+      return;
+    }
+    const amountRaw = renewAmount.replace(/,/g, '').trim();
+    const amount = parseFloat(amountRaw);
+    if (!Number.isFinite(amount) || amount < 0) {
+      setRenewError('Enter a valid price');
+      return;
+    }
+
     setRenewing(true);
     try {
       const { error } = await supabase
         .from('expenses')
         .update({
-          next_renewal_date: next,
+          start_date: renewFrom,
+          next_renewal_date: renewTo,
+          amount,
+          account: renewAccount.trim(),
           status: 'active',
           updated_at: new Date().toISOString(),
         })
-        .eq('id', expense.id);
+        .eq('id', confirmRenew.id);
       if (error) throw error;
-      showNotification(`${expense.name} renewed → ${formatDate(next)}`, 'success', {
-        title: 'Expenses',
-        icon: '/app.png',
-      });
+      showNotification(
+        `${confirmRenew.name} renewed · ${formatDate(renewFrom)} → ${formatDate(renewTo)}`,
+        'success',
+        {
+          title: 'Expenses',
+          icon: '/app.png',
+        }
+      );
       setConfirmRenew(null);
       await fetchExpenses();
     } catch (err: any) {
@@ -411,10 +522,7 @@ export const Expenses: React.FC = () => {
         if (confirmRenew && !renewing) setConfirmRenew(null);
         if (confirmDelete) setConfirmDelete(null);
       }
-      if (event.key === 'Enter' && confirmRenew && !renewing) {
-        event.preventDefault();
-        void handleMarkRenewed(confirmRenew);
-      }
+      // Enter renew handled by form submit only
       if (event.key === 'Enter' && confirmDelete) {
         event.preventDefault();
         void handleDelete();
@@ -634,7 +742,7 @@ export const Expenses: React.FC = () => {
                   {renewable && (
                     <button
                       type="button"
-                      onClick={() => setConfirmRenew(e)}
+                      onClick={() => openRenewModal(e)}
                       className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-md border border-amber-400/40 text-amber-300 hover:bg-amber-500/15 transition-colors"
                     >
                       <RefreshCw className="w-3 h-3" />
@@ -827,7 +935,7 @@ export const Expenses: React.FC = () => {
                   {renewable && (
                     <button
                       type="button"
-                      onClick={() => setConfirmRenew(expense)}
+                      onClick={() => openRenewModal(expense)}
                       className="inline-flex items-center gap-1.5 text-xs text-[#F6E9E9]/50 hover:text-[#E16428] transition-colors font-['Inter']"
                     >
                       <RefreshCw className="w-3.5 h-3.5" />
@@ -861,90 +969,145 @@ export const Expenses: React.FC = () => {
               if (!renewing) setConfirmRenew(null);
             }}
           >
-            <div
-              className="w-full max-w-[280px] p-6 animate-scaleIn text-center"
+            <form
+              className="w-full max-w-md bg-[#272121] border border-[#E16428]/25 rounded-2xl shadow-2xl p-5 sm:p-6 animate-scaleIn"
               onClick={e => e.stopPropagation()}
+              onSubmit={e => {
+                e.preventDefault();
+                void handleMarkRenewed();
+              }}
             >
-              <div className="relative mx-auto mb-5 h-[4.5rem] w-[4.5rem]">
-                <span
-                  className="absolute inset-0 rounded-full border border-[#E16428]/25 opacity-60"
-                  style={{ animation: 'renew-ring 2.4s ease-out infinite' }}
-                />
-                <span
-                  className="absolute inset-2 rounded-full border border-amber-400/20 opacity-50"
-                  style={{ animation: 'renew-ring 2.4s ease-out 0.6s infinite' }}
-                />
-                <div className="relative flex h-full w-full items-center justify-center rounded-full border border-[#E16428]/40 bg-gradient-to-br from-[#E16428]/15 to-transparent">
-                  <RefreshCw
-                    className="h-6 w-6 text-[#E16428]"
-                    style={{ animation: 'renew-icon 2.8s ease-in-out infinite' }}
-                  />
+              <div className="flex items-start gap-3 mb-4">
+                <div className="w-11 h-11 rounded-xl bg-white border border-[#E16428]/20 overflow-hidden flex items-center justify-center shrink-0">
+                  {confirmRenew.imageUrl ? (
+                    <img
+                      src={confirmRenew.imageUrl}
+                      alt=""
+                      className="w-full h-full object-contain p-0.5"
+                    />
+                  ) : (
+                    <RefreshCw className="w-5 h-5 text-[#E16428]" />
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-lg font-semibold text-[#F6E9E9] font-['Poppins'] tracking-tight">
+                    Renew subscription
+                  </h3>
+                  <p className="text-sm text-[#F6E9E9]/55 font-['Inter'] truncate">
+                    {confirmRenew.name}
+                  </p>
                 </div>
               </div>
 
-              <h3 className="text-2xl font-semibold tracking-tight text-[#F6E9E9] font-['Playfair_Display']">
-                Mark renewed?
-              </h3>
-              <p className="mt-1.5 text-[13px] leading-relaxed text-[#F6E9E9]/55 font-['Inter']">
-                Confirm renewal for{' '}
-                <span className="text-[#E16428] font-medium">{confirmRenew.name}</span>
-                {confirmRenew.nextRenewalDate ? (
-                  <>
-                    {' '}
-                    <span className="text-[#F6E9E9]/35">
-                      · next{' '}
-                      {formatDate(
-                        addBillingPeriod(
-                          confirmRenew.nextRenewalDate,
-                          confirmRenew.billingCycle || 'monthly'
-                        )
-                      )}
-                    </span>
-                  </>
-                ) : null}
-                .
-              </p>
+              <div className="space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <UnderlineDatePicker
+                      label={
+                        <>
+                          From date <span className="text-[#E16428]">*</span>
+                        </>
+                      }
+                      value={renewFrom}
+                      onChange={iso => {
+                        setRenewFrom(iso);
+                        if (iso && confirmRenew) {
+                          setRenewTo(
+                            addBillingPeriod(iso, confirmRenew.billingCycle || 'monthly')
+                          );
+                        }
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <UnderlineDatePicker
+                      label={
+                        <>
+                          To date <span className="text-[#E16428]">*</span>
+                        </>
+                      }
+                      value={renewTo}
+                      onChange={setRenewTo}
+                    />
+                  </div>
+                </div>
 
-              <div className="mt-6 space-y-2.5">
-                <button
-                  type="button"
-                  disabled={renewing}
-                  onClick={() => void handleMarkRenewed(confirmRenew)}
-                  className="group w-full flex items-center justify-center gap-2 py-3 border-0 border-b-2 border-[#E16428]/70 rounded-none bg-transparent text-sm font-semibold text-[#E16428] hover:text-[#f07a42] hover:border-[#E16428] transition-all duration-200 font-['Inter'] focus:outline-none disabled:opacity-50"
-                >
-                  <RefreshCw
-                    className={`h-4 w-4 transition-transform duration-300 group-hover:scale-110 ${
-                      renewing ? 'animate-spin' : ''
-                    }`}
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wide text-[#F6E9E9]/45 mb-0.5 font-['Inter']">
+                    Price (LKR) <span className="text-[#E16428]">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={renewAmount}
+                    disabled={renewing}
+                    onChange={e => {
+                      const withoutCommas = e.target.value.replace(/,/g, '').trim();
+                      if (withoutCommas === '') {
+                        setRenewAmount('');
+                        return;
+                      }
+                      if (!/^\d*\.?\d{0,2}$/.test(withoutCommas)) return;
+                      if (withoutCommas.endsWith('.')) {
+                        const intPart = withoutCommas.slice(0, -1);
+                        setRenewAmount(
+                          `${intPart === '' ? '0' : Number(intPart).toLocaleString('en-US')}.`
+                        );
+                        return;
+                      }
+                      if (withoutCommas.includes('.')) {
+                        const [intPart, decPart] = withoutCommas.split('.');
+                        setRenewAmount(
+                          `${Number(intPart || '0').toLocaleString('en-US')}.${decPart}`
+                        );
+                        return;
+                      }
+                      setRenewAmount(Number(withoutCommas).toLocaleString('en-US'));
+                    }}
+                    placeholder="0"
+                    className="underline-field w-full px-0 py-2 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] text-sm placeholder-[#F6E9E9]/35 focus:border-[#E16428] font-['Inter'] disabled:opacity-50"
                   />
-                  <span>{renewing ? 'Renewing…' : 'Yes, renew'}</span>
-                </button>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wide text-[#F6E9E9]/45 mb-0.5 font-['Inter']">
+                    Account (username / email)
+                  </label>
+                  <input
+                    type="text"
+                    value={renewAccount}
+                    disabled={renewing}
+                    onChange={e => setRenewAccount(e.target.value)}
+                    placeholder="e.g. you@company.com or @username"
+                    autoComplete="username"
+                    className="underline-field w-full px-0 py-2 bg-transparent border-0 border-b border-[#E16428]/30 rounded-none text-[#F6E9E9] text-sm placeholder-[#F6E9E9]/35 focus:border-[#E16428] font-['Inter'] disabled:opacity-50"
+                  />
+                </div>
+
+                {renewError && (
+                  <p className="text-xs text-red-400 font-['Inter']">{renewError}</p>
+                )}
+              </div>
+
+              <div className="mt-5 flex flex-col sm:flex-row gap-2 sm:gap-3">
                 <button
                   type="button"
                   disabled={renewing}
                   onClick={() => setConfirmRenew(null)}
-                  className="w-full py-2.5 border-0 border-b border-transparent rounded-none bg-transparent text-sm text-[#F6E9E9]/50 hover:text-[#F6E9E9] hover:border-[#F6E9E9]/25 transition-all duration-200 font-['Inter'] focus:outline-none disabled:opacity-40"
+                  className="sm:flex-1 py-2.5 text-sm text-[#F6E9E9]/55 hover:text-[#F6E9E9] font-['Inter'] transition-colors disabled:opacity-40"
                 >
-                  Keep as is
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={renewing}
+                  className="sm:flex-1 inline-flex items-center justify-center gap-2 py-2.5 border-0 border-b-2 border-[#E16428]/70 text-sm font-semibold text-[#E16428] hover:text-[#f07a42] hover:border-[#E16428] font-['Inter'] transition-colors disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-4 h-4 ${renewing ? 'animate-spin' : ''}`} />
+                  {renewing ? 'Renewing…' : 'Confirm renew'}
                 </button>
               </div>
-
-              <p className="mt-5 text-[10px] tracking-[0.18em] uppercase text-[#F6E9E9]/25 font-['Inter']">
-                Esc to keep · Enter to renew
-              </p>
-
-              <style>{`
-                @keyframes renew-ring {
-                  0% { transform: scale(0.85); opacity: 0.55; }
-                  70% { transform: scale(1.25); opacity: 0; }
-                  100% { transform: scale(1.25); opacity: 0; }
-                }
-                @keyframes renew-icon {
-                  0%, 100% { transform: scale(1) rotate(0deg); }
-                  50% { transform: scale(1.08) rotate(45deg); }
-                }
-              `}</style>
-            </div>
+            </form>
           </div>,
           document.body
         )}
